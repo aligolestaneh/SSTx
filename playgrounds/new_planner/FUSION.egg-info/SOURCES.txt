@@ -1,0 +1,6 @@
+setup.py
+FUSION.egg-info/PKG-INFO
+FUSION.egg-info/SOURCES.txt
+FUSION.egg-info/dependency_links.txt
+FUSION.egg-info/not-zip-safe
+FUSION.egg-info/top_level.txt

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libMY_LIBRARY.a CMakeFiles/MY_LIBRARY.dir/testPlanner.cpp.o
+/usr/bin/ranlib libMY_LIBRARY.a

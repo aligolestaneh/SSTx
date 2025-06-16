@@ -1,0 +1,218 @@
+<robot name="lab_scene">
+
+    <!-- Base link -->
+    <link name="base_link">
+        <visual>
+            <origin xyz="0.0 -0.508 0.0" rpy="0.0 0.0 1.570796" />
+            <geometry>
+                <mesh filename="lab_scene/lab_scene.obj" scale="1 1 1" />
+            </geometry>
+            <material name="texture">
+                <color rgba="1.0 1.0 1.0 1.0" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0.0 -0.508 0.0" rpy="0.0 0.0 1.570796" />
+            <geometry>
+                <mesh filename="lab_scene/lab_scene_vhacd.stl" scale="1 1 1" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+
+    <!-- Wall 1 -->
+    <link name="wall_1">
+        <visual>
+            <origin xyz="-1 -1.26 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1 -1.26 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_1_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_1" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	 <!-- Wall 2 -->
+    <link name="wall_2">
+        <visual>
+            <origin xyz="-1 -0.93 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1 -0.93 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_2_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_2" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	<!-- Wall 3 -->
+    <link name="wall_3">
+        <visual>
+            <origin xyz="-1 -0.60 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1 -0.60 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_3_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_3" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	<!-- Wall 4 -->
+    <link name="wall_4">
+        <visual>
+            <origin xyz="-1 -0.27 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1 -0.27 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.022 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_4_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_4" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	<!-- Wall 5 -->
+    <link name="wall_5">
+        <visual>
+            <origin xyz="-1 -0.765 0.235" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.99 0.022" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1 -0.765 0.235" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.45 0.99 0.022" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_5_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_5" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	<!-- Wall 6 -->
+    <link name="wall_6">
+        <visual>
+            <origin xyz="-1.225 -0.776 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.022 0.99 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-1.225 -0.776 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.022 0.99 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_6_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_6" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+	<!-- Wall 7 -->
+    <link name="wall_7">
+        <visual>
+            <origin xyz="-0.775 -0.776 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.022 0.99 0.33" />
+            </geometry>
+            <material name="wood_brown"/>
+        </visual>
+        <collision>
+            <origin xyz="-0.775 -0.776 0.4" rpy="0.0 0.0 0.0" />
+            <geometry>
+                <box size="0.022 0.99 0.33" />
+            </geometry>
+        </collision>
+        <inertial>
+            <mass value="1.0" />
+            <inertia ixx="1e-3" ixy="0.0" ixz="0.0" iyy="1e-3" iyz="0.0" izz="1e-3" />
+        </inertial>
+    </link>
+    
+    <joint name="wall_7_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="wall_7" />
+        <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    </joint>
+
+    <material name="wood_brown">
+        <color rgba="0.84 0.64 0.46 1.0"/>
+    </material>
+</robot>

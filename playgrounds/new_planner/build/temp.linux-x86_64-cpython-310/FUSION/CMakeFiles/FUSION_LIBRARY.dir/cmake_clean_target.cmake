@@ -1,0 +1,3 @@
+file(REMOVE_RECURSE
+  "libFUSION_LIBRARY.a"
+)
