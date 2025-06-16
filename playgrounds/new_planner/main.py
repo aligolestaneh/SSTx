@@ -3,6 +3,7 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 
 # Add the root project directory to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
@@ -66,13 +67,25 @@ def main(
         fusionError, naiveError = execute(
             ss, propagator, optimizerName, objShape, learningRate, numEpochs
         )
+        fusionErrorList.append(fusionError)
+        naiveErrorList.append(naiveError)
         if fusionError < naiveError:
             numSuccess += 1
-            fusionErrorList.append(fusionError)
-            naiveErrorList.append(naiveError)
-    print(f"{Colors.INFO}[INFO] Success rate: {numSuccess / numTrials}")
-    print(f"{Colors.INFO}[INFO] Fusion error: {np.mean(fusionErrorList)}")
-    print(f"{Colors.INFO}[INFO] Naive error: {np.mean(naiveErrorList)}")
+
+    success_rate = numSuccess / numTrials
+    print(f"{Colors.INFO}[INFO] Success rate: {success_rate:.2%}")
+
+    if len(fusionErrorList) > 0:
+        print(
+            f"{Colors.INFO}[INFO] Fusion error: {np.mean(fusionErrorList):.4f}"
+        )
+        print(
+            f"{Colors.INFO}[INFO] Naive error: {np.mean(naiveErrorList):.4f}"
+        )
+    else:
+        print(
+            f"{Colors.WARNING}[WARNING] No successful trials! Could not calculate mean errors. This might indicate that the planning or execution is failing."
+        )
 
 
 def plan(
@@ -134,58 +147,6 @@ def plan(
     return ss
 
 
-# def executeNoise(ss, propagator):
-#     # Start simulating the final pose using an gaussian noise
-#     # input("Press Enter to start executing the noise model...")
-
-#     soluationPath = fusion.get_path(ss)
-#     soluationControls = fusion.get_controls(ss)
-#     start_time = time.time()
-#     simulatedState = SE2Pose(soluationPath[0])
-#     print("\nTesting the execution error:")
-#     for i, control in enumerate(soluationControls):
-#         # Get the device of the model
-#         device = next(propagator.parameters()).device
-
-#         # Create tensor and move to same device as model
-#         control_tensor = torch.tensor(control, device=device).unsqueeze(0)
-#         output = propagator(control_tensor)
-#         delta = SE2Pose(
-#             np.array(
-#                 [
-#                     output[0, 0].detach().cpu().numpy(),
-#                     output[0, 1].detach().cpu().numpy(),
-#                 ]
-#             ),
-#             output[0, 2].detach().cpu().numpy(),
-#         )
-#         simulatedState = simulatedState @ delta
-#         # add noise to the simulated state
-#         print(f"[STEP {i}] Simulated state: {simulatedState}")
-#         simulatedState.position[0] += np.clip(
-#             np.random.normal(0, 0.003), -0.01, 0.01
-#         )
-#         simulatedState.position[1] += np.clip(
-#             np.random.normal(0, 0.003), -0.01, 0.01
-#         )
-#         simulatedState.euler[2] += np.clip(
-#             np.random.normal(0, 0.05), -0.05, 0.05
-#         )
-#         print(f"[STEP {i}] Simulated state: {simulatedState}")
-#         print(f"[STEP {i}] Control: {np.round(control, 4)}")
-
-#     print(
-#         f"{Colors.INFO}\n[INFO] Expected final state: {SE2Pose(soluationPath[-1])}"
-#     )
-#     print(f"{Colors.INFO}[INFO] Actual final state:   {simulatedState}")
-#     print(
-#         f"{Colors.INFO}[INFO] Total error: {simulatedState.distance(SE2Pose(soluationPath[-1])):.4f}"
-#     )
-#     print(f"{Colors.ENDC}")
-#     end_time = time.time()
-#     print(f"[INFO] Testing time: {end_time - start_time} seconds")
-
-
 def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
     # Start executing the fusion model
     # input("Press Enter to start executing the fusion model...")
@@ -226,65 +187,47 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
 
         closestNodes = fusion.get_nearest_nodes(ss, node)
 
-        # Generate 100 additional nodes by sampling Gaussians around the current node
-        num_additional_nodes = 15000
-        additional_nodes = []
-        additional_controls = []  # Store controls for additional nodes
-
-        # Gaussian sampling parameters
-        pos_std = 0.003  # Standard deviation for position (x, y)
-        angle_std = 0.05  # Standard deviation for angle (theta)
-
-        for _ in range(num_additional_nodes):
-            # Sample position around current node with Gaussian noise
-            noisy_x = node[0] + np.random.normal(0, pos_std)
-            noisy_y = node[1] + np.random.normal(0, pos_std)
-            noisy_theta = node[2] + np.random.normal(0, angle_std)
-
-            # Normalize angle to [-π, π]
-            while noisy_theta > np.pi:
-                noisy_theta -= 2.0 * np.pi
-            while noisy_theta < -np.pi:
-                noisy_theta += 2.0 * np.pi
-
-            additional_nodes.append([noisy_x, noisy_y, noisy_theta])
+        # Generate additional nodes by sampling Gaussians around the current node
+        num_additional_nodes = 10000
+        additional_nodes = sample_random_nodes(node, num_additional_nodes)
 
         # Combine original closest nodes with additional sampled nodes
         all_closest_nodes = list(closestNodes) + additional_nodes
         numClosestNodeList.append(len(all_closest_nodes))
 
-        # print(f"[INFO] For node: {np.round(node, 4)}")
-        for closestNode in all_closest_nodes:
-            closestNodeList.append(closestNode)
+        # Convert all nodes to SE2Pose objects at once
+        closest_poses = [
+            SE2Pose(node[:2], node[2]) for node in all_closest_nodes
+        ]
 
-            # Get the relative se2pose between the closest node and the next node
-            closestPose = SE2Pose(
-                closestNode[:2], closestNode[2]
-            )  # position=[x,y], rotation=yaw
+        # Calculate all relative poses at once
+        relative_poses = [pose.invert @ nextPose for pose in closest_poses]
 
-            relativePose = closestPose.invert @ nextPose
-            relativePoseList.append(
-                np.array(
-                    [
-                        relativePose.position[0],
-                        relativePose.position[1],
-                        relativePose.euler[2],
-                    ]
-                )
-            )
-            startGuessList.append(initialGuess)
+        # Convert relative poses to numpy arrays
+        relative_poses_array = np.array(
+            [
+                [pose.position[0], pose.position[1], pose.euler[2]]
+                for pose in relative_poses
+            ]
+        )
 
-            # print(f"      relative_pose: {np.round(relativePose, 4)}")
+        # Add to lists
+        closestNodeList.extend(all_closest_nodes)
+        relativePoseList.extend(relative_poses_array)
+        startGuessList.extend([initialGuess] * len(all_closest_nodes))
 
     end_time = time.time()
-    print(f"[INFO] Get nearest node time: {end_time - start_time} seconds")
+    print(
+        f"[INFO] Generate nearest node and relative pose time: {end_time - start_time} seconds"
+    )
 
-    # Solve the optimization problem
-    start_time = time.time()
-    # Convert list of numpy arrays to single numpy array to avoid PyTorch warning
+    # Convert list of numpy arrays to single numpy array
     relativePoseArray = np.array(relativePoseList)
     closestNodeArray = np.array(closestNodeList)
     startGuessArray = np.array(startGuessList)
+
+    # Solve the optimization problem
+    start_time = time.time()
     if optimizerName == "forward_backward":
         relativeControls = optModel.predict(
             relativePoseArray,
@@ -298,8 +241,10 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
             # x_min=[0.0, -0.4, 0.0],
             # x_max=[4.0, 0.4, 0.3],
         )
+    else:
+        raise ValueError(f"Optimizer {optimizerName} not supported")
 
-        # plot the loss
+        # Plot the loss
         # plt.figure(figsize=(10, 5))
         # plt.plot(loss, 1000)
         # plt.title("Optimization Loss Over Time")
@@ -312,19 +257,8 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
     # Print the type of relativeControls and relativePoseArray
     print(f"[INFO] Relative controls: {relativeControls.shape}")
     print(f"[INFO] Relative poses: {relativePoseArray.shape}")
-    print(f"[INFO] Relative controls: {relativeControls.shape}")
     print(f"[INFO] Start guess: {startGuessArray.shape}")
     print(f"[INFO] Relative poses numbers: {numClosestNodeList}\n")
-
-    # Fix the first element of relativeControls to be close to one of the values in rotations
-    rotations = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2])
-    for i in range(relativeControls.shape[0]):
-        diff = np.abs(relativeControls[i, 0] - rotations)
-        relativeControls[i, 0] = rotations[np.argmin(diff)]
-        # if relativeControls[i, 0] % np.pi == 0:
-        #     relativeControls[i, 1] *= objShape[1]
-        # else:
-        #     relativeControls[i, 1] *= objShape[0]
 
     # Split arrays into batches based on numClosestNodeList
     splitIndices = np.cumsum(numClosestNodeList[:-1])
@@ -333,11 +267,89 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
     relativePoseBatches = np.split(relativePoseArray, splitIndices)
     startGuessBatches = np.split(startGuessArray, splitIndices)
 
+    # Validate controls by checking if they result in states close to next states
+    valid_controls = []
+    valid_poses = []
+    valid_start_guesses = []
+    valid_closest_nodes = []
+    current_idx = 0
+
+    for i in range(len(soluationPath) - 1):
+        # Get the i-th batch of control, pass through the propogator and get the delta, compare with relativePoseBatches[i]
+        batch_controls = controlBatches[i]
+        batch_start_guesses = startGuessBatches[i]
+        # Convert to tensor before passing to propagator
+        control_tensor = torch.tensor(
+            batch_controls, device=device, dtype=torch.float32
+        )
+        batch_delta = propagator(control_tensor)
+        batch_delta = SE2Pose(
+            np.array(
+                [
+                    batch_delta[0, 0].detach().cpu().numpy(),
+                    batch_delta[0, 1].detach().cpu().numpy(),
+                ]
+            ),
+            batch_delta[0, 2].detach().cpu().numpy(),
+        )
+        batch_relativePose = [
+            SE2Pose(relativePose[:2], relativePose[2])
+            for relativePose in relativePoseBatches[i]
+        ]
+
+        # Calculate the distance between the batch_delta and the batch_relativePose using the distance function
+        batch_distance = [
+            batch_delta.distance(_relativePose)
+            for _relativePose in batch_relativePose
+        ]
+
+        # Collect all indices to remove
+        indices_to_remove = [
+            j for j, dist in enumerate(batch_distance) if dist > 0.05
+        ]
+
+        # Remove all invalid controls at once
+        if indices_to_remove:
+            controlBatches[i] = np.delete(
+                controlBatches[i], indices_to_remove, axis=0
+            )
+            relativePoseBatches[i] = np.delete(
+                relativePoseBatches[i], indices_to_remove, axis=0
+            )
+            startGuessBatches[i] = np.delete(
+                startGuessBatches[i], indices_to_remove, axis=0
+            )
+            closestNodeBatches[i] = np.delete(
+                closestNodeBatches[i], indices_to_remove, axis=0
+            )
+            numClosestNodeList[i] -= len(indices_to_remove)
+
+        print(
+            f"[INFO] Removed {len(indices_to_remove)} controls for step {i + 1}"
+        )
+
+    # Convert lists back to numpy arrays
+    # relativeControls = np.array(controlBatches)
+    # closestNodeArray = np.array(closestNodeBatches)
+    # startGuessArray = np.array(startGuessBatches)
+
+    # Fix the first element of relativeControls to be close to one of the values in rotations for all the batches
+    rotations = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2])
+    for i in range(len(controlBatches)):
+        current_rotations = controlBatches[i][:, 0]
+        diffs = np.abs(current_rotations[:, np.newaxis] - rotations)
+        closest_indices = np.argmin(diffs, axis=1)
+        controlBatches[i][:, 0] = rotations[closest_indices]
+
+        # if relativeControls[i, 0] % np.pi == 0:
+        #     relativeControls[i, 1] *= objShape[1]
+        # else:
+        #     relativeControls[i, 1] *= objShape[0]
+
     simulatedState = SE2Pose(soluationPath[0])
     simulatedFusion = SE2Pose(soluationPath[0])
 
     for i in range(len(soluationPath) - 1):
-
         if i == 0:
             control_tensor = torch.tensor(
                 soluationControls[i], device=device
@@ -374,23 +386,20 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
             print(f"----------------------------------------------------")
             continue
 
-        distanceList = [
-            simulatedFusion.distance(
-                SE2Pose(pose[:2], pose[2]), angular_weight=0.5
-            )
-            for pose in closestNodeBatches[i]
-        ]
+        # Get the current batch of validated controls
+        current_controls = controlBatches[i]
+        current_nodes = closestNodeBatches[i]
+        current_start_guesses = startGuessBatches[i]
 
-        # Get indices of 10 closest nodes
-        closest_indices = np.argsort(distanceList)[:5]
-        closest_nodes = closestNodeBatches[i][closest_indices]
-        closest_controls = controlBatches[i][closest_indices]
+        if len(current_controls) == 0:
+            print(f"[WARNING] No valid controls found for step {i + 1}")
+            continue
 
-        # Try each control and find the one that gets closest to the next node
+        # Try each validated control and find the one that gets closest to the next node
         best_control_idx = 0
         min_next_distance = float("inf")
 
-        for idx, control in enumerate(closest_controls):
+        for idx, control in enumerate(current_controls):
             # Apply the control to current state
             control_tensor = torch.tensor(
                 control, device=device, dtype=torch.float32
@@ -420,13 +429,12 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
                 best_control_idx = idx
 
         # Use the best control found
-        best_control = closest_controls[best_control_idx]
-        best_node = closest_nodes[best_control_idx]
-        best_pose = SE2Pose(best_node[:2], best_node[2])
+        best_control = current_controls[best_control_idx]
+        best_node = current_nodes[best_control_idx]
 
         print(
-            f"For node {simulatedFusion}, best node is {best_pose} with distance {distanceList[closest_indices[best_control_idx]]:.4f} "
-            f"and control {np.round(best_control, 4)} -- initial guess: {np.round(startGuessBatches[i][closest_indices[best_control_idx]], 4)}"
+            f"For node {simulatedFusion}, best node is {SE2Pose(best_node[:2], best_node[2])} with distance {min_next_distance:.4f} "
+            f"and control {np.round(best_control, 4)} -- initial guess: {np.round(current_start_guesses[best_control_idx], 4)}"
         )
 
         # Get the optimal control with FUSION method
@@ -495,12 +503,56 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
     return fusionError, naiveError
 
 
+def sample_random_nodes(node, num_nodes):
+    # Generate additional nodes by sampling Gaussians around the current node
+    additional_nodes = []
+
+    # Gaussian sampling parameters
+    pos_std = 0.003  # Standard deviation for position (x, y)
+    angle_std = 0.05  # Standard deviation for angle (theta)
+
+    for _ in range(num_nodes):
+        # Sample position around current node with Gaussian noise
+        noisy_x = node[0] + np.random.normal(0, pos_std)
+        noisy_y = node[1] + np.random.normal(0, pos_std)
+        noisy_theta = node[2] + np.random.normal(0, angle_std)
+
+        # Normalize angle to [-π, π]
+        while noisy_theta > np.pi:
+            noisy_theta -= 2.0 * np.pi
+        while noisy_theta < -np.pi:
+            noisy_theta += 2.0 * np.pi
+
+        additional_nodes.append([noisy_x, noisy_y, noisy_theta])
+
+    return additional_nodes
+
+
 if __name__ == "__main__":
+    # Set up argument parser
+    parser = argparse.ArgumentParser(
+        description="Run the planner with specified parameters"
+    )
+    parser.add_argument(
+        "--solve-time",
+        type=float,
+        default=5.0,
+        help="Time limit for solving the planning problem (default: 5.0)",
+    )
+    parser.add_argument(
+        "--num-trials",
+        type=int,
+        default=20,
+        help="Number of trials to run (default: 20)",
+    )
+
+    # Parse arguments
+    args = parser.parse_args()
 
     _startPos = [0, -0.7, 0]
     _goalPos = [0.3, -0.7, 0]
     _objShape = [0.1628, 0.2139, 0.0676]
-    _solveTime = 5
+    _solveTime = args.solve_time
     _goalTolerance = 0.03
     _spaceBounds = [-0.9, 0.76, -0.9, -0.3]
     _controlBounds = [0, 4, -0.4, 0.4, 0, 0.3]
@@ -509,7 +561,7 @@ if __name__ == "__main__":
     _optimizerName = "forward_optimizer"
     _learningRate = 1e-3
     _numEpochs = 200
-    _numTrials = 20
+    _numTrials = args.num_trials
 
     _stateSpace = main(
         startPos=_startPos,
