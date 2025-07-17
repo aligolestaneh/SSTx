@@ -1,8 +1,221 @@
+import sys
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+try:
+    from ompl import base as ob
+    from ompl import control as oc
+except ImportError:
+    # if the ompl module is not in the PYTHONPATH assume it is installed in a
+    # subdirectory of the parent directory called "py-bindings."
+    from os.path import abspath, dirname, join
+    import sys
+
+    sys.path.insert(
+        0, join(dirname(dirname(abspath(__file__))), "py-bindings")
+    )
+    from ompl import base as ob
+    from ompl import control as oc
+
+
+def parse_command_line_args():
+    """Parse command line arguments in key=value format"""
+    args = {}
+
+    # Default values
+    defaults = {
+        "plan_time": 10.0,
+        "replan_time": 3.0,
+        "dynamics_type": "model",
+        "planner": "fusion",
+    }
+
+    # Parse command line arguments
+    for arg in sys.argv[1:]:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+
+            # Convert to appropriate type
+            if key in ["plan_time", "replan_time"]:
+                try:
+                    args[key] = float(value)
+                except ValueError:
+                    print(
+                        f"Warning: Invalid float value for {key}: {value}. Using default."
+                    )
+                    args[key] = defaults[key]
+            else:
+                args[key] = value
+        else:
+            print(f"Warning: Ignoring invalid argument format: {arg}")
+
+    # Fill in defaults for missing arguments
+    for key, default_value in defaults.items():
+        if key not in args:
+            args[key] = default_value
+
+    return args
+
+
+def visualize_tree_3d(planner, filename="fusion_tree_3d.png", show_plot=True):
+    """Visualize the tree structure in 3D (x, y, theta) using matplotlib
+
+    Args:
+        planner: The OMPL planner instance
+        filename: Name of the file to save the plot (default: "fusion_tree_3d.png")
+        show_plot: Whether to display the plot interactively (default: True)
+    """
+    from mpl_toolkits.mplot3d import Axes3D
+
+    # Get planner data
+    planner_data = ob.PlannerData(planner.getSpaceInformation())
+    print("Getting planner data for 3D visualization...")
+    planner.getPlannerData(planner_data)
+    print("Planner data obtained")
+
+    # Extract all vertices (x, y, theta)
+    all_vertices = []
+    print("Collecting vertices...")
+    for i in range(planner_data.numVertices()):
+        vertex = planner_data.getVertex(i)
+        state = vertex.getState()
+        # Extract SE2 state components
+        x = state.getX()
+        y = state.getY()
+        theta = state.getYaw()
+        all_vertices.append((x, y, theta))
+
+    # Get solution path states
+    solution_states = []
+    try:
+        solution_path = planner.getProblemDefinition().getSolutionPath()
+        if solution_path:
+            print("Extracting solution path...")
+            for i in range(solution_path.getStateCount()):
+                state = solution_path.getState(i)
+                x = state.getX()
+                y = state.getY()
+                theta = state.getYaw()
+                solution_states.append((x, y, theta))
+    except:
+        print("No solution path available")
+        pass
+
+    print("Creating 3D plot...")
+    # Create the 3D plot
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection="3d")
+
+    if all_vertices:
+        # Convert to numpy arrays for easier plotting
+        all_vertices_array = np.array(all_vertices)
+
+        # Plot all tree vertices as small blue dots
+        ax.scatter(
+            all_vertices_array[:, 0],  # x
+            all_vertices_array[:, 1],  # y
+            all_vertices_array[:, 2],  # theta
+            c="steelblue",
+            s=20,
+            alpha=0.3,  # More transparent to show density patterns
+            label="Tree nodes",
+        )
+
+    # Plot solution path if available
+    if solution_states:
+        solution_array = np.array(solution_states)
+
+        # Plot solution path vertices as larger red dots
+        ax.scatter(
+            solution_array[:, 0],  # x
+            solution_array[:, 1],  # y
+            solution_array[:, 2],  # theta
+            c="red",
+            s=60,
+            alpha=0.9,
+            label="Solution path nodes",
+            marker="o",
+            edgecolors="darkred",
+            linewidth=2,
+        )
+
+        # Connect solution path states with lines
+        ax.plot(
+            solution_array[:, 0],  # x
+            solution_array[:, 1],  # y
+            solution_array[:, 2],  # theta
+            color="orange",
+            linewidth=3,
+            alpha=0.8,
+            label="Solution path",
+        )
+
+        # Mark start and goal specially
+        if len(solution_states) > 0:
+            # Start state (green square)
+            start = solution_array[0]
+            ax.scatter(
+                start[0],
+                start[1],
+                start[2],
+                c="green",
+                s=100,
+                marker="s",
+                edgecolors="darkgreen",
+                linewidth=2,
+                label="Start state",
+            )
+
+            # Goal state (red star)
+            goal = solution_array[-1]
+            ax.scatter(
+                goal[0],
+                goal[1],
+                goal[2],
+                c="red",
+                s=120,
+                marker="*",
+                edgecolors="darkred",
+                linewidth=2,
+                label="Goal state",
+            )
+
+    # Set labels and title
+    ax.set_xlabel("X", fontsize=12)
+    ax.set_ylabel("Y", fontsize=12)
+    ax.set_zlabel("Theta (radians)", fontsize=12)
+    ax.set_title(
+        "Fusion Planner Tree Visualization (3D: x, y, θ)",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    # Add legend
+    ax.legend(loc="upper right", fontsize=10)
+
+    # Set fixed axis limits for x, y, and theta to match state space bounds
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    ax.set_zlim(-np.pi, np.pi)  # Theta typically ranges from -π to π
+
+    # Set equal aspect ratio for x and y
+    ax.set_box_aspect([1, 1, 0.5])  # Make theta axis shorter for better view
+
+    plt.tight_layout()
+
+    print(f"Saving 3D tree to {filename}")
+    plt.savefig(filename, dpi=300, bbox_inches="tight")
+    print(f"3D tree saved to {filename}")
+
+    if show_plot:
+        plt.show(block=False)
+    else:
+        plt.close()
 
 
 class DataLoader:

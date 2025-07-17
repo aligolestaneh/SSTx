@@ -98,7 +98,8 @@ class ControlSampler(oc.ControlSampler):
 
             # Convert to absolute control values
             control[0] = int(control[0]) * np.pi / 2
-            # No need to multiply side offset by edge length since we're using absolute values
+            mask = (control[0] % np.pi) == 0
+            control[1] *= np.where(mask, self.obj_shape[1], self.obj_shape[0])
 
 
 class ActiveControlSampler(oc.ControlSampler):

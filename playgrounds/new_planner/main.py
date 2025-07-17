@@ -305,7 +305,7 @@ def execute(ss, propagator, optimizerName, objShape, learningRate, numEpochs):
 
         # Collect all indices to remove
         indices_to_remove = [
-            j for j, dist in enumerate(batch_distance) if dist > 0.05
+            j for j, dist in enumerate(batch_distance) if dist > 0.025
         ]
 
         # Remove all invalid controls at once

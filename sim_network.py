@@ -213,7 +213,7 @@ if __name__ == "__main__":
         "lab_scene",
         "ur10_rod_d435",
         [("cracker_box_flipped", (0, -0.7, 0.0))],
-        n_envs=50,
+        n_envs=1,
         dt=0.01,
         substeps=4,
         visualize=True,

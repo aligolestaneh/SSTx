@@ -527,7 +527,9 @@ PYBIND11_MODULE(FUSION, m) {
     
     // Expose the FUSION class with proper lifetime management
     py::class_<oc::FUSION, std::shared_ptr<oc::FUSION>>(m, "FUSION")
-        .def(py::init<const oc::SpaceInformationPtr &>(), py::keep_alive<1, 2>())
+        .def(py::init([](oc::SpaceInformation *si) {
+            return std::make_shared<oc::FUSION>(oc::SpaceInformationPtr(si));
+        }))
         .def("setGoalBias", &oc::FUSION::setGoalBias)
         .def("getGoalBias", &oc::FUSION::getGoalBias)
         .def("setSelectionRadius", &oc::FUSION::setSelectionRadius)
@@ -643,4 +645,12 @@ PYBIND11_MODULE(FUSION, m) {
         // Force garbage collection and cleanup
         // This can be called manually if needed
     }, "Manual cleanup function");
+
+    m.def("make_fusion_planner", [](py::object si) {
+        // Extract the raw pointer from the SWIG object
+        // This is a hack, but works for OMPL's SWIG Python bindings
+        auto capsule = si.attr("_get_c_pointer")();
+        auto ptr = reinterpret_cast<ompl::control::SpaceInformation*>(capsule.cast<size_t>());
+        return std::make_shared<oc::FUSION>(ompl::control::SpaceInformationPtr(ptr));
+    });
 } 
