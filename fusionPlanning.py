@@ -346,21 +346,20 @@ def createWaypointThread(client, pos_waypoints):
     return thread
 
 
-def runResolver(planner, replanningTime, resultContainer):
-    result = planner.resolve(replanningTime)
+def runResolver(ss, replanningTime, resultContainer):
+    ss.getPlanner().resolve(replanningTime)
+    result = getSolutionInfo(ss.getSolutionPath(), ss)
     resultContainer["result"] = result
     resultContainer["completed"] = True
 
 
-def createResolverThread(planner, replanningTime):
+def createResolverThread(ss, replanningTime):
     resultContainer = {"result": None, "completed": False}
     thread = threading.Thread(
-        target=runResolver, args=(planner, replanningTime, resultContainer)
+        target=runResolver, args=(ss, replanningTime, resultContainer)
     )
     thread.daemon = True
-    thread.resultContainer = (
-        resultContainer  # Attach result container to thread
-    )
+    thread.resultContainer = resultContainer
     return thread
 
 
@@ -531,6 +530,9 @@ def main(
         _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
         obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
 
+        # Rotate the scene by the negative of the current object angle
+        client.execute("rotate_scene", -obj_pose.euler[2])
+
         print("Generating the path")
         times, ws_path = generate_path_form_params(
             obj_pose,
@@ -560,7 +562,7 @@ def main(
         ####################################################
         # Create and start resolver thread (clean one-liner)
         print("Creating and starting resolver thread")
-        resolverThread = createResolverThread(ss.getPlanner(), replanningTime)
+        resolverThread = createResolverThread(ss, replanningTime)
         resolverThread.start()
 
         ####################################################
@@ -601,6 +603,8 @@ def main(
         # Get the resolver result
         resolver_result = resolverThread.resultContainer["result"]
         resolver_completed = resolverThread.resultContainer["completed"]
+
+        nextControl = resolver_result["controls"][0]
 
         # optimizer_result = optimizerThread.resultContainer["result"]
         # optimizer_completed = optimizerThread.resultContainer["completed"]
