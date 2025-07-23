@@ -1,2 +1,0 @@
-/usr/bin/ar qc libFUSION_LIBRARY.a CMakeFiles/FUSION_LIBRARY.dir/fusion.cpp.o CMakeFiles/FUSION_LIBRARY.dir/utils.cpp.o
-/usr/bin/ranlib libFUSION_LIBRARY.a

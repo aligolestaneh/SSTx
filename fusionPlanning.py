@@ -171,6 +171,7 @@ def plan(
 
     # Set the propagator
     ss.setStatePropagator(oc.StatePropagatorFn(propagator))
+    ss.getSpaceInformation().setMinMaxControlDuration(1, 1)
 
     # Set the control sampler
     controlSampler = pickControlSampler(system, objectShape)
@@ -202,18 +203,13 @@ def plan(
     if solved:
         # Print the path to screen
         print("Initial solution found")
-        return getSolutionInfo(ss.getSolutionPath(), ss), ss
+        return getSolutionInfo(ss), ss
     else:
         print("No solution found")
         return None
 
 
-def getSolutionInfo(solution_path, ss):
-    solution_info = {}
-    solution_info["state_count"] = solution_path.getStateCount()
-    solution_info["control_count"] = solution_path.getControlCount()
-
-    # Extract all solution data while objects are still valid
+def extractSolutionInfo(solution_path, ss):
     solution_info = {}
     solution_info["state_count"] = solution_path.getStateCount()
     solution_info["control_count"] = solution_path.getControlCount()
@@ -225,14 +221,9 @@ def getSolutionInfo(solution_path, ss):
     controls_list = []
     for i in range(solution_info["control_count"]):
         control = solution_path.getControl(i)
-
-        control_values = []
-        for j in range(control_dimension):
-            control_values.append(control[j])
-
+        control_values = [control[j] for j in range(control_dimension)]
         controls_list.append(control_values)
-
-        solution_info["controls"] = controls_list
+    solution_info["controls"] = controls_list
 
     # Extract all states while objects are valid
     states_list = []
@@ -240,14 +231,21 @@ def getSolutionInfo(solution_path, ss):
         state = solution_path.getState(i)
         state_values = [state.getX(), state.getY(), state.getYaw()]
         states_list.append(state_values)
-
     solution_info["states"] = states_list
 
-    print(
-        f"Successfully extracted {len(controls_list)} controls and {len(states_list)} states"
-    )
-
     return solution_info
+
+
+def getSolutionInfo(ss):
+    """Return a list of solution infos for all solutions in ss."""
+    solutions = ss.getProblemDefinition().getSolutions()
+    all_infos = []
+    for solution in solutions:
+        info = extractSolutionInfo(solution.path_, ss)
+        info["cost"] = solution.cost_.value()
+        all_infos.append(info)
+    print(f"Successfully extracted {len(all_infos)} solutions.")
+    return all_infos
 
 
 def state2list(state, state_type: str) -> list:
@@ -347,8 +345,8 @@ def createWaypointThread(client, pos_waypoints):
 
 
 def runResolver(ss, replanningTime, resultContainer):
-    ss.getPlanner().resolve(replanningTime)
-    result = getSolutionInfo(ss.getSolutionPath(), ss)
+    ss.getPlanner().replan(replanningTime)
+    result = getSolutionInfo(ss)
     resultContainer["result"] = result
     resultContainer["completed"] = True
 
@@ -516,11 +514,30 @@ def main(
         visualize=visualize,
     )
 
-    nextControl = solutionInfo["controls"][0]
+    if solutionInfo is None:
+        print("No initial solution found. Exiting.")
+        return
+
+    print("Initial solution found!")
+    print(
+        f"Solution has {solutionInfo['state_count']} states and {solutionInfo['control_count']} controls"
+    )
+
+    # Print initial planned states
+    print("\n📋 Initial planned states:")
+    for i, state in enumerate(solutionInfo["states"]):
+        print(
+            f"  State {i}: x={state[0]:.3f}, y={state[1]:.3f}, yaw={state[2]:.3f}"
+        )
+
+    print("\n🎮 Initial planned controls:")
+    for i, control in enumerate(solutionInfo["controls"]):
+        print(f"  Control {i}: {control}")
 
     # Start the execution loop
     index = 0
-    print("Starting the execution loop")
+    print("\n🚀 Starting the execution loop")
+
     while True:
         print(f"Executing the {index}th iteration")
         ####################################################
@@ -529,41 +546,54 @@ def main(
         print("Getting the object information")
         _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
         obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
-
-        # Rotate the scene by the negative of the current object angle
-        client.execute("rotate_scene", -obj_pose.euler[2])
-
-        print("Generating the path")
-        times, ws_path = generate_path_form_params(
-            obj_pose,
-            objectShape,
-            nextControl,
-            tool_offset=tool_offset,
+        currentState = np.array(
+            [obj_pose.position[0], obj_pose.position[1], obj_pose.euler[2]]
         )
 
-        print("Converting the path to waypoints")
+        # 1.1 Get the first state from solutionInfo and compare
+        planned_state = (
+            solutionInfo["states"][0] if solutionInfo.get("states") else None
+        )
+        if planned_state:
+            print(
+                f"Planned first state: x={planned_state[0]:.3f}, y={planned_state[1]:.3f}, yaw={planned_state[2]:.3f}"
+            )
+            print(
+                f"Actual object state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+            )
+        else:
+            print("No planned state available.")
+            break
+
+        # 2. Execute the first control in solutionInfo
+        if solutionInfo.get("controls") and len(solutionInfo["controls"]) > 0:
+            nextControl = solutionInfo["controls"][0]
+            print(f"Executing control: {nextControl}")
+        else:
+            print("No controls available in solution.")
+            break
+
+        # Convert control to end-effector trajectory and execute
+        client.execute("rotate_scene", params=[None, -obj_pose.euler[2]])
+        times, ws_path = generate_path_form_params(
+            obj_pose, objectShape, nextControl, tool_offset=tool_offset
+        )
         traj = ik.ws_path_to_traj(Pose(), times, ws_path)
         waypoints = traj.to_step_waypoints(dt)
-        pos_waypoints = np.stack(
-            [waypoints[0]], axis=1
-        )  # Wrap in list to create proper shape
+        pos_waypoints = np.stack([waypoints[0]], axis=1)
 
-        print("Executing the waypoints")
-        print(nextControl)
-
-        # Execute waypoints without waiting for response
+        # Execute waypoints in parallel thread
+        print("Executing waypoints in parallel thread...")
         waypointThread = createWaypointThread(client, pos_waypoints)
         waypointThread.start()
-
-        print("Waypoint execution sent (continuing immediately)")
 
         ####################################################
         ########### Run the resolver in parallel ###########
         ####################################################
         # Create and start resolver thread (clean one-liner)
         print("Creating and starting resolver thread")
-        resolverThread = createResolverThread(ss, replanningTime)
-        resolverThread.start()
+        replanThread = createResolverThread(ss, replanningTime)
+        replanThread.start()
 
         ####################################################
         ########## Run the optimizer in parallel ###########
@@ -589,48 +619,110 @@ def main(
 
         # Wait for the resolver to complete
         waypointThread.join()
-        resolverThread.join()
+        replanThread.join()
         # optimizerThread.join()
 
         # Get the waypoint execution result
         waypoint_result = waypointThread.resultContainer["result"]
         waypoint_completed = waypointThread.resultContainer["completed"]
+        print(f"Waypoint execution completed: {waypoint_result}")
 
-        print(f"Waypoint execution completed: {waypoint_completed}")
-        if waypoint_completed:
-            print(f"Waypoint result: {waypoint_result}")
+        # Get replan result
+        replan_result = replanThread.resultContainer["result"]
+        replan_completed = replanThread.resultContainer["completed"]
+        print(f"Replan completed: {replan_completed}")
 
-        # Get the resolver result
-        resolver_result = resolverThread.resultContainer["result"]
-        resolver_completed = resolverThread.resultContainer["completed"]
+        # 3.1 Get updated solutionInfo and print updated states
+        if replan_completed and replan_result:
+            solutionInfo = replan_result
+            print("✅ solutionInfo updated successfully!")
 
-        nextControl = resolver_result["controls"][0]
+            # Check if solutionInfo has the expected structure
+            if (
+                "state_count" in solutionInfo
+                and "control_count" in solutionInfo
+            ):
+                print(
+                    f"Updated solution has {solutionInfo['state_count']} states and {solutionInfo['control_count']} controls"
+                )
 
-        # optimizer_result = optimizerThread.resultContainer["result"]
-        # optimizer_completed = optimizerThread.resultContainer["completed"]
+                # Check if there are states to display
+                if "states" in solutionInfo and solutionInfo["states"]:
+                    print("Updated planned states after replan:")
+                    for i, state in enumerate(solutionInfo["states"]):
+                        print(
+                            f"  State {i}: x={state[0]:.3f}, y={state[1]:.3f}, yaw={state[2]:.3f}"
+                        )
+                else:
+                    print("⚠️ No states available in updated solution")
 
-        # print(f"Optimizer completed: {optimizer_completed}")
-        # if optimizer_completed:
-        #     print(f"Optimizer result: {optimizer_result}")
-        print(f"Resolver completed: {resolver_completed}")
-        if resolver_completed:
-            print(f"Resolver result: {resolver_result}")
-
-            # Check if resolve was successful
-            if resolver_result:
-                print("✅ Resolve successful - path updated")
-                # You can now get the updated solution path
-                updated_solution = ss.getSolutionPath()
-                if updated_solution and updated_solution.getStateCount() > 0:
+                # Check if there are controls to display
+                if "controls" in solutionInfo and solutionInfo["controls"]:
+                    print("Updated controls after replan:")
+                    for i, control in enumerate(solutionInfo["controls"]):
+                        print(f"  Control {i}: {control}")
+                else:
+                    print("⚠️ No controls available in updated solution")
                     print(
-                        f"Updated solution has {updated_solution.getStateCount()} states"
+                        "❌ Cannot continue without controls. Breaking loop."
                     )
-                    # Extract updated solution info if needed
-                    # updated_solution_info = getSolutionInfo(updated_solution, ss)
+                    break
             else:
-                print("❌ Resolve failed - no path improvement found")
+                print("❌ Updated solutionInfo has unexpected structure")
+                print(f"Available keys: {list(solutionInfo.keys())}")
+                break
+        else:
+            print("❌ No updated solution found after replan.")
+            break
 
-        # Break the loop if we reached the goal
+        # 3.2 Get and print the current object state after execution
+        _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
+        obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
+        currentState = np.array(
+            [obj_pose.position[0], obj_pose.position[1], obj_pose.euler[2]]
+        )
+        print(
+            f"Current object state after execution: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+        )
+
+        # Check for goal
+        goal_x, goal_y = goalState[0], goalState[1]
+        distance_to_goal = (
+            (currentState[0] - goal_x) ** 2 + (currentState[1] - goal_y) ** 2
+        ) ** 0.5
+        print(f"Distance to goal: {distance_to_goal:.3f}")
+        if distance_to_goal < 0.05:
+            print("🎉 SUCCESS! Reached goal!")
+            break
+
+        # Update nextControl for next iteration
+        if solutionInfo.get("controls") and len(solutionInfo["controls"]) > 0:
+            nextControl = solutionInfo["controls"][0]
+            print(f"🔄 Updated nextControl for next iteration: {nextControl}")
+        else:
+            print("❌ No controls available in updated solution.")
+            break
+
+        index += 1
+
+    print(f"\n🏁 Execution process completed!")
+
+    # Get final object pose
+    _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
+    obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
+    finalState = np.array(
+        [obj_pose.position[0], obj_pose.position[1], obj_pose.euler[2]]
+    )
+
+    print(
+        f"Final object pose: x={finalState[0]:.3f}, y={finalState[1]:.3f}, yaw={finalState[2]:.3f}"
+    )
+    print(
+        f"Goal state: x={goalState[0]:.3f}, y={goalState[1]:.3f}, yaw={goalState[2]:.3f}"
+    )
+    print(
+        f"Distance to goal: {((finalState[0] - goalState[0])**2 + (finalState[1] - goalState[1])**2)**0.5:.3f}"
+    )
 
 
 if __name__ == "__main__":

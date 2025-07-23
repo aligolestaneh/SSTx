@@ -109,6 +109,12 @@ def pickGoalState(
     ss: oc.SimpleSetup,
 ):
     if system == "pushing":
+        # goal_state = SE2GoalState(
+        #     ss.getSpaceInformation(),
+        #     np.array([goalState[0], goalState[1], goalState[2]]),
+        #     np.array([[-0.05, 0.05], [-0.05, 0.05], [-0.1, 0.1]]),
+        # )
+        # return goal_state
         edge = 0.725
         goal_state = GraspableRegion(
             ss.getSpaceInformation(),
@@ -123,7 +129,7 @@ def pickGoalState(
 
 def pickPlanner(planner_name: str, ss: oc.SimpleSetup):
     if planner_name == "fusion":
-        planner = oc.Fusion(ss.getSpaceInformation())
+        planner = oc.FUSION(ss.getSpaceInformation())
         return planner
     elif planner_name == "sst":
         planner = oc.SST(ss.getSpaceInformation())
@@ -167,6 +173,45 @@ class ControlSampler(oc.ControlSampler):
         control[0] = int(control[0]) * np.pi / 2
         mask = (control[0] % np.pi) == 0
         control[1] *= np.where(mask, self.obj_shape[1], self.obj_shape[0])
+
+
+class SE2GoalState(ob.GoalState):
+    def __init__(self, si, goal, ranges):
+        super().__init__(si)
+        self.ranges = ranges
+        # Create a proper state object and set its values
+        goal_state = ob.State(si.getStateSpace())
+        goal_state().setX(goal[0])
+        goal_state().setY(goal[1])
+        goal_state().setYaw(goal[2])
+        self.setState(goal_state)
+        self.setThreshold(0.01)
+
+    def distanceGoal(self, state: ob.State) -> float:
+        x = state[0].getX()
+        y = state[0].getY()
+        yaw = state[0].getYaw()
+        goal_x = self.getState()[0].getX()
+        goal_y = self.getState()[0].getY()
+        goal_yaw = self.getState()[0].getYaw()
+
+        # distance to goal in SE2 space
+        x_dist = x - goal_x
+        y_dist = y - goal_y
+        yaw_dist = yaw - goal_yaw
+        yaw_dist = (yaw_dist + np.pi) % (2 * np.pi) - np.pi
+
+        # if in range, return a value smaller than 0.01
+        # to indicate success, since threshold is by set to 0.01
+        if (
+            self.ranges[0][0] <= x_dist <= self.ranges[0][1]
+            and self.ranges[1][0] <= y_dist <= self.ranges[1][1]
+            and self.ranges[2][0] <= yaw_dist <= self.ranges[2][1]
+        ):
+            return 0
+        else:
+            dist = np.sqrt(x_dist**2 + y_dist**2 + 0.5 * yaw_dist**2)
+            return dist
 
 
 def plan(

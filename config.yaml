@@ -7,10 +7,10 @@ system: "pushing"
 objectName: "crackerBox"
 
 # Start state as a list [x, y, theta] for SE2 space
-startState: [0.0, -0.7, 0.0]
+startState: [0.4, -0.7, 0.0]
 
 # Goal state as a list [x, y, theta] for SE2 space  
-goalState: [0.725, -0.7, 0.0]
+goalState: [-0.4, -0.7, 0.0]
 
 # Planning time in seconds
 planningTime: 10.0
