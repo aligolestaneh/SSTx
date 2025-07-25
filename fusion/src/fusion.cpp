@@ -1,38 +1,6 @@
-/*********************************************************************
-* Software License Agreement (BSD License)
-*
-*  Copyright (c) 2015, Rutgers the State University of New Jersey, New Brunswick
-*  All rights reserved.
-*
-*  Redistribution and use in source and binary forms, with or without
-*  modification, are permitted provided that the following conditions
-*  are met:
-*
-*   * Redistributions of source code must retain the above copyright
-*     notice, this list of conditions and the following disclaimer.
-*   * Redistributions in binary form must reproduce the above
-*     copyright notice, this list of conditions and the following
-*     disclaimer in the documentation and/or other materials provided
-*     with the distribution.
-*   * Neither the name of Rutgers University nor the names of its
-*     contributors may be used to endorse or promote products derived
-*     from this software without specific prior written permission.
-*
-*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-*  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-*  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-*  FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-*  COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-*  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-*  BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-*  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-*  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-*  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-*  POSSIBILITY OF SUCH DAMAGE.
-*********************************************************************/
-
-/* Authors: Zakary Littlefield */
+/*
+ * Author: Ali Golestaneh
+ */
 
 #include <set>
 #include <queue>
@@ -72,6 +40,8 @@ ompl::control::Fusion::Fusion(const SpaceInformationPtr &si) : base::Planner(si,
                                                                                                                 "100");
     Planner::declareParam<double>("pruning_radius", this, &Fusion::setPruningRadius, &Fusion::getPruningRadius, "0.:.1:100");
     Planner::declareParam<bool>("terminate_on_first_solution", this, &Fusion::setTerminateOnFirstSolution, &Fusion::getTerminateOnFirstSolution, "0,1");
+
+    // bestSolutionPath_ = std::make_shared<PathControl>(si);
 }
 
 ompl::control::Fusion::~Fusion()
@@ -413,7 +383,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     hasExactSolution_.store(true);
 
                     OMPL_INFORM("Found solution with cost %.4f", solution->accCost_.value());
-                    bestSolutionCost_ = solution->accCost_.value();
+                    // TODO: Update bestSolutionCost_ and bestSolutionPath_
 
                     auto path(std::make_shared<PathControl>(si_));
                     for (int i = prevSolution_.size() - 1; i >= 1; --i)
@@ -422,7 +392,6 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     path->append(prevSolution_[0]);
                     ompl::base::PlannerSolution path2solution(path);
                     path2solution.cost_ = solution->accCost_;
-                    std::cout << "Adding solution path: " << path2solution.cost_.value() << std::endl;
                     pdef_->addSolutionPath(path2solution);
 
                     if (intermediateSolutionCallback)
@@ -434,6 +403,16 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     sufficientlyShort = opt_->isSatisfied(solution->accCost_);
                     if (sufficientlyShort)
                         break;
+                    if (opt_->isCostBetterThan(motion->accCost_, bestSolutionCost_))
+                    {
+                        bestSolutionCost_ = motion->accCost_;
+                        // Re-create the class member to a new, empty path
+                        bestSolutionPath_ = std::make_shared<PathControl>(si_);
+                        for (int i = prevSolution_.size() - 2; i >= 1; --i)
+                            bestSolutionPath_->append(prevSolution_[i], prevSolutionControls_[i - 1],
+                                        prevSolutionSteps_[i - 1] * siC_->getPropagationStepSize());
+                        bestSolutionPath_->append(prevSolution_[0]);
+                    }
                 }
                 if (solution == nullptr && dist < approxdif)
                 {
@@ -707,8 +686,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::resolve(const double replanning
 //         double y = firstState->as<ompl::base::SE2StateSpace::StateType>()->getY();
 //         double yaw = firstState->as<ompl::base::SE2StateSpace::StateType>()->getYaw();
 //         OMPL_INFORM("Simple_resolve: Original path starts at (%.3f, %.3f, %.3f)", x, y, yaw);
-//     }
-    
+abn    
 //     // 2. Change the start state to the next state in solution path
 //     ompl::base::State *nextState = pathControl->getState(1);
 //     pdef_->clearStartStates();
@@ -854,9 +832,45 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
             branchQueue.push(child);
         }
     }
+    
+    // Additionally, mark all motions that are part of the original solution path
+    // This ensures the original solution remains available
+    // //////////////////////////////////////////////////////////////////////////
+    // OMPL_INFORM("Starting: Marking motions in original solution path");
+    // std::set<Motion*> originalPathMotions;
+    
+    // // Find all motions that correspond to states in the original solution path
+    // for (size_t i = 1; i < pathControl->getStateCount(); ++i) {
+    //     ompl::base::State* pathState = pathControl->getState(i);
+        
+    //     // Find the motion in the tree that corresponds to this state
+    //     Motion* tempMotion = new Motion(siC_);
+    //     si_->copyState(tempMotion->state_, pathState);
+    //     Motion* correspondingMotion = nn_->nearest(tempMotion);
+    //     delete tempMotion;
+        
+    //     if (correspondingMotion) {
+    //         double dist = si_->distance(correspondingMotion->state_, pathState);
+    //         if (dist < 1e-5) { // Close enough to be the same state
+    //             originalPathMotions.insert(correspondingMotion);
+    //             correspondingMotion->toKeep_ = true;
+    //             keepCount++;
+                
+    //             // Also mark all ancestors of this motion to preserve the path
+    //             Motion* ancestor = correspondingMotion->parent_;
+    //             while (ancestor && !ancestor->toKeep_) {
+    //                 ancestor->toKeep_ = true;
+    //                 keepCount++;
+    //                 ancestor = ancestor->parent_;
+    //             }
+    //         }
+    //     }
+    // }
+    // OMPL_INFORM("Finished: Marking motions in original solution path");
+    
     OMPL_INFORM("Finished: Marking motions to keep (branch from second state)");
     
-    OMPL_INFORM("Replan: Marked %d motions to keep (branch from second state)", keepCount);
+    OMPL_INFORM("Replan: Marked %d motions to keep (including original solution path)", keepCount);
     
     // 6. Remove motions from latest to earliest (reverse order of addition)
     OMPL_INFORM("Starting: Remove motions not marked to keep");
@@ -875,6 +889,24 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
     }
     OMPL_INFORM("Finished: Remove motions not marked to keep");
     
+    // Debug: Check if all states from bestSolutionPath_ are still in the tree
+    if (bestSolutionPath_ && bestSolutionPath_->getStateCount() > 0) {
+        OMPL_INFORM("Debug: Checking if all states from bestSolutionPath_ are still in the tree after pruning");
+        for (size_t i = 0; i < bestSolutionPath_->getStateCount(); ++i) {
+            ompl::base::State* state = bestSolutionPath_->getState(i);
+            Motion* tempMotion = new Motion(siC_);
+            si_->copyState(tempMotion->state_, state);
+            Motion* found = nn_->nearest(tempMotion);
+            double dist = si_->distance(found->state_, state);
+            if (dist < 1e-5) {
+                OMPL_INFORM("  State %zu: PRESENT in tree (distance=%.8f)", i, dist);
+            } else {
+                OMPL_WARN("  State %zu: MISSING from tree (nearest distance=%.8f)", i, dist);
+            }
+            delete tempMotion;
+        }
+    }
+
     OMPL_INFORM("Replan: Removed %d motions, kept %d motions", removedCount, keepCount);
     
     // 7. Clear witnesses and rebuild
@@ -936,40 +968,19 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
     pdef_->addStartState(newState);
     OMPL_INFORM("Finished: Set the start state in the problem definition");
     
-    // 12. Update the current solution path by removing the first state and control
-    OMPL_INFORM("Starting: Update the current solution path");
-    auto updatedPath = std::make_shared<PathControl>(si_);
-    // Add all states and controls starting from index 1 (skip the first state)
-    for (size_t i = 1; i < pathControl->getStateCount(); ++i)
-    {
-        if (i == 1)
-        {
-            // First state in updated path (was second state in original path)
-            updatedPath->append(pathControl->getState(i));
-        }
-        else
-        {
-            // Add control and state for remaining segments
-            updatedPath->append(pathControl->getState(i), 
-                               pathControl->getControl(i-1),
-                               pathControl->getControlDuration(i-1));
-        }
-    }
-    OMPL_INFORM("Finished: Update the current solution path");
-    
     // Clear existing solution paths and add the updated path as a PlannerSolution (with cost)
-    OMPL_INFORM("Starting: Add updated path as PlannerSolution");
+    OMPL_INFORM("Clearing all existing solution paths before solve");
     pdef_->clearSolutionPaths();
-    ompl::base::PlannerSolution path2solution(updatedPath);
-    // Set the cost to the cost of the whole path using the optimization objective
-    if (opt_)
-        path2solution.cost_ = updatedPath->cost(opt_);
+    OMPL_INFORM("Creating PlannerSolution for bestSolutionPath_");
+    ompl::base::PlannerSolution path2solution(bestSolutionPath_);
+    OMPL_INFORM("Setting cost of bestSolutionPath_ to %.4f", bestSolutionCost_.value());
+    path2solution.cost_ = bestSolutionCost_;
+    OMPL_INFORM("Adding bestSolutionPath_ as PlannerSolution to the problem definition");
     pdef_->addSolutionPath(path2solution);
-    OMPL_INFORM("Finished: Add updated path as PlannerSolution");
-    
-    OMPL_INFORM("Replan: Updated solution path - removed first state/control, now has %d states and %d controls", 
-                updatedPath->getStateCount(), updatedPath->getControlCount());
-    
+    OMPL_INFORM("Finished: Add bestSolutionPath_ as PlannerSolution");
+    OMPL_INFORM("Replan: bestSolutionPath_ - removed first state/control, now has %d states and %d controls", 
+                bestSolutionPath_->getStateCount(), bestSolutionPath_->getControlCount());
+
     // 13. Run the solve function to continue planning from the new start state
     OMPL_INFORM("Starting: Run solve to continue planning from new start state");
     base::PlannerTerminationCondition ptc = base::timedPlannerTerminationCondition(replanning_time);

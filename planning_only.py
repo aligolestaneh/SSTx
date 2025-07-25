@@ -180,6 +180,15 @@ def plan(
     if solved:
         # Print the path to screen
         print("Initial solution found")
+        # Print the cost of the best path
+        solution_path = ss.getSolutionPath()
+        if solution_path:
+            # Get the cost from the solution object since PathControl.cost() is not implemented
+            solutions = ss.getProblemDefinition().getSolutions()
+            if solutions:
+                print(f"Best path cost: {solutions[0].cost_.value():.5f}")
+            else:
+                print("Best path cost: No solution cost available")
         return getSolutionInfo(ss.getSolutionPath(), ss), ss
     else:
         print("No solution found")

@@ -129,7 +129,7 @@ def pickGoalState(
 
 def pickPlanner(planner_name: str, ss: oc.SimpleSetup):
     if planner_name == "fusion":
-        planner = oc.FUSION(ss.getSpaceInformation())
+        planner = oc.Fusion(ss.getSpaceInformation())
         return planner
     elif planner_name == "sst":
         planner = oc.SST(ss.getSpaceInformation())

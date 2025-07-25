@@ -193,6 +193,11 @@ def plan(
     planner.setPruningRadius(0.1)
     ss.setPlanner(planner)
 
+    # Set the optimization objective to path length
+    ss.setOptimizationObjective(
+        ob.PathLengthOptimizationObjective(ss.getSpaceInformation())
+    )
+
     # Attempt to solve the problem
     solved = ss.solve(planningTime)
 
@@ -203,13 +208,13 @@ def plan(
     if solved:
         # Print the path to screen
         print("Initial solution found")
-        return getSolutionInfo(ss), ss
+        return getSolutionsInfo(ss), ss
     else:
         print("No solution found")
-        return None
+        return None, None
 
 
-def extractSolutionInfo(solution_path, ss):
+def getPathInfo(solution_path, ss):
     solution_info = {}
     solution_info["state_count"] = solution_path.getStateCount()
     solution_info["control_count"] = solution_path.getControlCount()
@@ -236,16 +241,21 @@ def extractSolutionInfo(solution_path, ss):
     return solution_info
 
 
-def getSolutionInfo(ss):
-    """Return a list of solution infos for all solutions in ss."""
+def getSolutionsInfo(ss):
     solutions = ss.getProblemDefinition().getSolutions()
-    all_infos = []
+    allSolutionInfos = []
     for solution in solutions:
-        info = extractSolutionInfo(solution.path_, ss)
+        info = getPathInfo(solution.path_, ss)
         info["cost"] = solution.cost_.value()
-        all_infos.append(info)
-    print(f"Successfully extracted {len(all_infos)} solutions.")
-    return all_infos
+        allSolutionInfos.append(info)
+
+    # Sort by cost (best first)
+    allSolutionInfos.sort(key=lambda x: x["cost"])
+
+    print(
+        f"Successfully extracted and sorted {len(allSolutionInfos)} solutions by cost."
+    )
+    return allSolutionInfos
 
 
 def state2list(state, state_type: str) -> list:
@@ -333,7 +343,7 @@ def executeWaypoints(client, pos_waypoints, resultContainer):
     resultContainer["completed"] = True
 
 
-def createWaypointThread(client, pos_waypoints):
+def createExecuteThread(client, pos_waypoints):
     resultContainer = {"result": None, "completed": False}
     thread = threading.Thread(
         target=executeWaypoints,
@@ -346,7 +356,7 @@ def createWaypointThread(client, pos_waypoints):
 
 def runResolver(ss, replanningTime, resultContainer):
     ss.getPlanner().replan(replanningTime)
-    result = getSolutionInfo(ss)
+    result = getSolutionsInfo(ss)
     resultContainer["result"] = result
     resultContainer["completed"] = True
 
@@ -502,7 +512,7 @@ def main(
 
     # Plan the initial solution
     print("Planning the initial solution")
-    solutionInfo, ss = plan(
+    solutionsInfo, ss = plan(
         system=system,
         objectShape=objectShape,
         startState=startState,
@@ -514,28 +524,28 @@ def main(
         visualize=visualize,
     )
 
-    if solutionInfo is None:
+    if solutionsInfo is None:
         print("No initial solution found. Exiting.")
         return
 
     print("Initial solution found!")
-    print(
-        f"Solution has {solutionInfo['state_count']} states and {solutionInfo['control_count']} controls"
-    )
+    # print the number of solutions found
+    print(f"Found {len(solutionsInfo)} solutions")
 
     # Print initial planned states
     print("\n📋 Initial planned states:")
-    for i, state in enumerate(solutionInfo["states"]):
+    for i, state in enumerate(solutionsInfo[0]["states"]):
         print(
             f"  State {i}: x={state[0]:.3f}, y={state[1]:.3f}, yaw={state[2]:.3f}"
         )
 
     print("\n🎮 Initial planned controls:")
-    for i, control in enumerate(solutionInfo["controls"]):
+    for i, control in enumerate(solutionsInfo[0]["controls"]):
         print(f"  Control {i}: {control}")
 
     # Start the execution loop
     index = 0
+    nextControl = solutionsInfo[0]["controls"][0]
     print("\n🚀 Starting the execution loop")
 
     while True:
@@ -566,12 +576,7 @@ def main(
             break
 
         # 2. Execute the first control in solutionInfo
-        if solutionInfo.get("controls") and len(solutionInfo["controls"]) > 0:
-            nextControl = solutionInfo["controls"][0]
-            print(f"Executing control: {nextControl}")
-        else:
-            print("No controls available in solution.")
-            break
+        print(f"Executing control: {nextControl}")
 
         # Convert control to end-effector trajectory and execute
         client.execute("rotate_scene", params=[None, -obj_pose.euler[2]])
@@ -584,8 +589,8 @@ def main(
 
         # Execute waypoints in parallel thread
         print("Executing waypoints in parallel thread...")
-        waypointThread = createWaypointThread(client, pos_waypoints)
-        waypointThread.start()
+        executeThread = createExecuteThread(client, pos_waypoints)
+        executeThread.start()
 
         ####################################################
         ########### Run the resolver in parallel ###########
@@ -618,14 +623,14 @@ def main(
         # Choose the nextControl based on the current state and the current plan
 
         # Wait for the resolver to complete
-        waypointThread.join()
+        executeThread.join()
         replanThread.join()
         # optimizerThread.join()
 
         # Get the waypoint execution result
-        waypoint_result = waypointThread.resultContainer["result"]
-        waypoint_completed = waypointThread.resultContainer["completed"]
-        print(f"Waypoint execution completed: {waypoint_result}")
+        execute_result = executeThread.resultContainer["result"]
+        execute_completed = executeThread.resultContainer["completed"]
+        print(f"Waypoint execution completed: {execute_result}")
 
         # Get replan result
         replan_result = replanThread.resultContainer["result"]

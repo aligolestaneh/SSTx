@@ -62,7 +62,6 @@ def plan():
 
     # create a control space
     cspace = oc.RealVectorControlSpace(space, 2)
-
     # set the bounds for the control space
     cbounds = ob.RealVectorBounds(2)
     cbounds.setLow(-0.3)
@@ -77,6 +76,8 @@ def plan():
         )
     )
     ss.setStatePropagator(oc.StatePropagatorFn(propagate))
+    # Set min and max control duration to 1
+    ss.getSpaceInformation().setMinMaxControlDuration(1, 1)
 
     # create a start state
     start = ob.State(space)
@@ -96,6 +97,8 @@ def plan():
     # (optionally) set planner
     si = ss.getSpaceInformation()
     planner = oc.Fusion(si)
+    # Set the optimization objective to path length
+    ss.setOptimizationObjective(ob.PathLengthOptimizationObjective(si))
     # planner = oc.SST(si)
     # planner = oc.RRT(si)
     # planner = oc.EST(si)
@@ -106,21 +109,27 @@ def plan():
     # planner = oc.SyclopRRT(si, decomp)
     ss.setPlanner(planner)
     # (optionally) set propagation step size
-    si.setPropagationStepSize(0.1)
+    si.setPropagationStepSize(1)
 
     # attempt to solve the problem
-    solved = ss.solve(10.0)
+    solved = ss.solve(5.0)
 
     if solved:
         print("Initial solution(s) found:")
         infos = getSolutionInfo(ss)
         for idx, info in enumerate(infos):
             print(f"Solution {idx}:")
-            print(f"  Cost: {info['cost']}")
+            print(f"  Cost: {info['cost']:.5f}")
             print(f"  State count: {info['state_count']}")
             print(f"  Control count: {info['control_count']}")
-            print(f"  States: {info['states']}")
-            print(f"  Controls: {info['controls']}")
+            print(f"  States: [")
+            for state in info["states"]:
+                print(f"    [{state[0]:.5f}, {state[1]:.5f}, {state[2]:.5f}]")
+            print(f"  ]")
+            print(f"  Controls: [")
+            for control in info["controls"]:
+                print(f"    [{', '.join(f'{c:.5f}' for c in control)}]")
+            print(f"  ]")
 
         # Now call replan on the planner
         print("\nCalling replan on the planner...")
@@ -133,11 +142,19 @@ def plan():
             print(f"\nAll solutions after replanning (count: {len(infos)}):")
             for idx, info in enumerate(infos):
                 print(f"Solution {idx}:")
-                print(f"  Cost: {info['cost']}")
+                print(f"  Cost: {info['cost']:.5f}")
                 print(f"  State count: {info['state_count']}")
                 print(f"  Control count: {info['control_count']}")
-                print(f"  States: {info['states']}")
-                print(f"  Controls: {info['controls']}")
+                print(f"  States: [")
+                for state in info["states"]:
+                    print(
+                        f"    [{state[0]:.5f}, {state[1]:.5f}, {state[2]:.5f}]"
+                    )
+                print(f"  ]")
+                print(f"  Controls: [")
+                for control in info["controls"]:
+                    print(f"    [{', '.join(f'{c:.5f}' for c in control)}]")
+                print(f"  ]")
         else:
             print("Planner does not support replan().")
     else:
