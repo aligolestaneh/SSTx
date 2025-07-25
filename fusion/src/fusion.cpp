@@ -686,7 +686,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::resolve(const double replanning
 //         double y = firstState->as<ompl::base::SE2StateSpace::StateType>()->getY();
 //         double yaw = firstState->as<ompl::base::SE2StateSpace::StateType>()->getYaw();
 //         OMPL_INFORM("Simple_resolve: Original path starts at (%.3f, %.3f, %.3f)", x, y, yaw);
-abn    
+   
 //     // 2. Change the start state to the next state in solution path
 //     ompl::base::State *nextState = pathControl->getState(1);
 //     pdef_->clearStartStates();

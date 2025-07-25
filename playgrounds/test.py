@@ -22,7 +22,12 @@ import sys
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
-from fusionPlanning import getSolutionInfo
+from fusionPlanning import (
+    getSolutionsInfo,
+    getChildrenStates,
+    state2list,
+    isSE2Equal,
+)
 
 
 class MyDecomposition(oc.GridDecomposition):
@@ -116,7 +121,7 @@ def plan():
 
     if solved:
         print("Initial solution(s) found:")
-        infos = getSolutionInfo(ss)
+        infos = getSolutionsInfo(ss)
         for idx, info in enumerate(infos):
             print(f"Solution {idx}:")
             print(f"  Cost: {info['cost']:.5f}")
@@ -131,14 +136,64 @@ def plan():
                 print(f"    [{', '.join(f'{c:.5f}' for c in control)}]")
             print(f"  ]")
 
+        # Test getChildrenStates function
+        print("\n" + "=" * 60)
+        print("🧪 TESTING getChildrenStates FUNCTION")
+        print("=" * 60)
+
+        # Test with the first state of the best solution
+        if len(infos) > 0:
+            best_solution = infos[0]  # Best solution (lowest cost)
+            first_state = best_solution["states"][0]
+            print(
+                f"\n🔍 Testing getChildrenStates for first state: {first_state}"
+            )
+
+            children = getChildrenStates(ss, first_state)
+            print(f"✅ Found {len(children)} children states:")
+            for i, child in enumerate(children):
+                print(f"  Child {i}: {child}")
+
+            # Test with the second state if it exists
+            if len(best_solution["states"]) > 1:
+                second_state = best_solution["states"][1]
+                print(
+                    f"\n🔍 Testing getChildrenStates for second state: {second_state}"
+                )
+
+                children2 = getChildrenStates(ss, second_state)
+                print(f"✅ Found {len(children2)} children states:")
+                for i, child in enumerate(children2):
+                    print(f"  Child {i}: {child}")
+
+            # Test with a state that should not exist
+            fake_state = [999.0, 999.0, 999.0]
+            print(
+                f"\n🔍 Testing getChildrenStates for fake state: {fake_state}"
+            )
+            children_fake = getChildrenStates(ss, fake_state)
+            print(
+                f"✅ Found {len(children_fake)} children states (should be 0):"
+            )
+            for i, child in enumerate(children_fake):
+                print(f"  Child {i}: {child}")
+
         # Now call replan on the planner
-        print("\nCalling replan on the planner...")
+        print("\n" + "=" * 60)
+        print("🔄 CALLING REPLAN")
+        print("=" * 60)
         planner = ss.getPlanner()
         if hasattr(planner, "replan"):
             planner.replan(5.0)  # You can adjust the replanning time as needed
             print("Replan finished.")
+
+            # Test getChildrenStates again after replanning
+            print("\n" + "=" * 60)
+            print("🧪 TESTING getChildrenStates AFTER REPLAN")
+            print("=" * 60)
+
             # Get all solutions after replanning
-            infos = getSolutionInfo(ss)
+            infos = getSolutionsInfo(ss)
             print(f"\nAll solutions after replanning (count: {len(infos)}):")
             for idx, info in enumerate(infos):
                 print(f"Solution {idx}:")
@@ -155,6 +210,21 @@ def plan():
                 for control in info["controls"]:
                     print(f"    [{', '.join(f'{c:.5f}' for c in control)}]")
                 print(f"  ]")
+
+            # Test getChildrenStates with the new solution
+            if len(infos) > 0:
+                best_solution = infos[0]  # Best solution after replan
+                first_state = best_solution["states"][0]
+                print(
+                    f"\n🔍 Testing getChildrenStates for first state after replan: {first_state}"
+                )
+
+                children = getChildrenStates(ss, first_state)
+                print(
+                    f"✅ Found {len(children)} children states after replan:"
+                )
+                for i, child in enumerate(children):
+                    print(f"  Child {i}: {child}")
         else:
             print("Planner does not support replan().")
     else:

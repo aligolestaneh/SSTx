@@ -291,40 +291,106 @@ def isSE2Equal(state1, state2, tolerance=1e-6):
     return diff_x < tolerance and diff_y < tolerance and diff_yaw < tolerance
 
 
+def arrayDistance(array1, array2, system: str):
+    if system == "SE2":
+        # Convert array1 and array2 to SE2State
+        space = ob.SE2StateSpace()
+        state1 = space.allocState()
+        state2 = space.allocState()
+        state1.setX(array1[0])
+        state1.setY(array1[1])
+        state1.setYaw(array1[2])
+        state2.setX(array2[0])
+        state2.setY(array2[1])
+        state2.setYaw(array2[2])
+        # Calculate using the functions in ompl SE2StateSpace
+        return space.distance(state1, state2)
+    elif system == "SE2Position":
+        return np.sqrt(
+            (array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2
+        )
+    else:
+        raise ValueError(f"Invalid system: {system}")
+
+
 def getChildrenStates(ss, targetState, tolerance=1e-6):
-    # targetState = state2list(targetState, "SE2")
+    print(
+        f"\n🔍 DEBUG: getChildrenStates called with targetState: {targetState}"
+    )
 
     planner_data = ob.PlannerData(ss.getSpaceInformation())
     ss.getPlanner().getPlannerData(planner_data)
 
     num_vertices = planner_data.numVertices()
+    print(f"📊 Total vertices in planner tree: {num_vertices}")
+
     targetVertexIdx = None
+    print(f"🔍 Searching for target state in planner tree...")
+
+    # Search for the target state
     for i in range(num_vertices):
         state = planner_data.getVertex(i).getState()
+        state_list = state2list(state, "SE2")
 
-        if isSE2Equal(state2list(state, "SE2"), targetState, tolerance):
+        if isSE2Equal(state_list, targetState, tolerance):
             targetVertexIdx = i
+            print(f"✅ Found target state at vertex index: {i}")
+            print(f"   Target: {targetState}")
+            print(f"   Found:  {state_list}")
             break
 
     if targetVertexIdx is None:
-        print(f"State {targetState} not found in planner tree")
+        print(f"❌ State {targetState} not found in planner tree")
+        print(f"🔍 Checking first few vertices for debugging:")
+        for i in range(min(5, num_vertices)):
+            state = planner_data.getVertex(i).getState()
+            state_list = state2list(state, "SE2")
+            print(f"   Vertex {i}: {state_list}")
+
+        # Also check if any vertex is close to the target
+        print(f"🔍 Checking for close matches (tolerance: {tolerance}):")
+        min_distance = float("inf")
+        closest_vertex = None
+        for i in range(min(10, num_vertices)):
+            state = planner_data.getVertex(i).getState()
+            state_list = state2list(state, "SE2")
+            distance = arrayDistance(targetState, state_list, "SE2")
+            if distance < min_distance:
+                min_distance = distance
+                closest_vertex = (i, state_list)
+            print(f"   Vertex {i}: {state_list} (distance: {distance:.6f})")
+
+        if closest_vertex:
+            print(
+                f"🔍 Closest vertex: {closest_vertex[1]} (distance: {min_distance:.6f})"
+            )
+
         return []
 
+    print(f"🔍 Getting edges for vertex {targetVertexIdx}...")
     childVertexIndices = ou.vectorUint()
     planner_data.getEdges(targetVertexIdx, childVertexIndices)
+
+    print(f"📊 Found {len(childVertexIndices)} child vertices")
 
     children_states = []
     for childVertexIdx in childVertexIndices:
         childState = planner_data.getVertex(childVertexIdx).getState()
+        child_state_list = state2list(childState, "SE2")
+        children_states.append(child_state_list)
+        print(f"   Child {childVertexIdx}: {child_state_list}")
 
-        children_states.append(state2list(childState, "SE2"))
-
+    print(f"✅ Returning {len(children_states)} children states")
     return children_states
 
 
 def sampleRandomState(state, numStates=1000, posSTD=0.003, rotSTD=0.05):
     sampledStates = []
-    stateList = state2list(state, "SE2")
+    # Convert state to list if it's not already
+    if hasattr(state, "getX"):  # It's an OMPL state object
+        stateList = state2list(state, "SE2")
+    else:  # It's already a list
+        stateList = state
     for _ in range(numStates):
         noisyX = stateList[0] + np.random.normal(0, posSTD)
         noisyY = stateList[1] + np.random.normal(0, posSTD)
@@ -380,29 +446,71 @@ def runOptimizer(
     numStates=1000,
     maxDistance=0.025,
 ):
+    print(f"\n🧠 DEBUG: runOptimizer started")
+    print(f"📊 Input parameters:")
+    print(f"  - nextState: {nextState}")
+    print(f"  - childrenStates count: {len(childrenStates)}")
+    print(f"  - initialGuessControl: {initialGuessControl}")
+    print(f"  - numStates: {numStates}")
+    print(f"  - maxDistance: {maxDistance}")
+
+    if len(childrenStates) == 0:
+        print("❌ ERROR: No children states provided!")
+        print("🔍 This could be due to:")
+        print("  1. The target state doesn't exist in the planner tree")
+        print("  2. The target state exists but has no children")
+        print("  3. The replanning modified the tree structure")
+        return {}
+
+    print(f"\n🔍 Step 1: Sampling random states...")
     sampledStates = sampleRandomState(nextState, numStates=numStates)
+    print(f"✅ Sampled {len(sampledStates)} random states")
+
+    print(f"\n🔍 Step 2: Converting to SE2Pose objects...")
     closestStates = [SE2Pose(state[:2], state[2]) for state in sampledStates]
+    print(f"✅ Converted {len(closestStates)} states to SE2Pose")
 
     # Pre-allocate arrays to avoid for loops
     numChildren = len(childrenStates)
     totalPairs = numChildren * numStates
+    print(f"\n🔍 Step 3: Setting up optimization arrays...")
+    print(f"  - numChildren: {numChildren}")
+    print(f"  - numStates: {numStates}")
+    print(f"  - totalPairs: {totalPairs}")
 
     # Create startGuessArray using tensor operation instead of list comprehension
     startGuessArray = np.full(
         (totalPairs, len(initialGuessControl)), initialGuessControl
     )
+    print(f"✅ Created startGuessArray with shape: {startGuessArray.shape}")
 
     # Pre-allocate relativePoses list
     relativePoses = [None] * totalPairs
+    print(
+        f"✅ Pre-allocated relativePoses list with {len(relativePoses)} elements"
+    )
+
+    print(f"\n🔍 Step 4: Computing relative poses...")
+    # Convert childrenStates to SE2Pose objects if they're lists
+    childrenStatesSE2 = []
+    for childState in childrenStates:
+        if isinstance(childState, list):
+            childrenStatesSE2.append(SE2Pose(childState[:2], childState[2]))
+        else:
+            childrenStatesSE2.append(childState)  # Already SE2Pose
+
+    print(f"✅ Converted {len(childrenStatesSE2)} children states to SE2Pose")
 
     # Use single loop with index calculation instead of nested loops
     for i in range(totalPairs):
         childIdx = i // numStates
         sampledIdx = i % numStates
         relativePoses[i] = (
-            closestStates[sampledIdx].invert @ childrenStates[childIdx]
+            closestStates[sampledIdx].invert @ childrenStatesSE2[childIdx]
         )
+    print(f"✅ Computed {len(relativePoses)} relative poses")
 
+    print(f"\n🔍 Step 5: Converting poses to array...")
     # Convert to array using vectorized operation
     relativePosesArray = np.array(
         [
@@ -410,42 +518,120 @@ def runOptimizer(
             for pose in relativePoses
         ]
     )
+    print(f"✅ Converted to array with shape: {relativePosesArray.shape}")
 
-    relativeControls, loss = optModel.predict(
-        relativePosesArray, startGuessArray
-    )
+    print(f"\n🔍 Step 6: Running model prediction...")
+    try:
+        print(f"🔍 Input shapes:")
+        print(f"  - relativePosesArray shape: {relativePosesArray.shape}")
+        print(f"  - startGuessArray shape: {startGuessArray.shape}")
+        print(f"  - relativePosesArray dtype: {relativePosesArray.dtype}")
+        print(f"  - startGuessArray dtype: {startGuessArray.dtype}")
 
-    controlsTensor = torch.tensor(
-        relativeControls, device=optModel.device, dtype=torch.float32
-    )
+        relativeControls, loss = optModel.predict(
+            relativePosesArray, startGuessArray
+        )
+        print(f"✅ Model prediction successful")
+        print(f"  - relativeControls shape: {relativeControls.shape}")
+        print(f"  - loss: {loss}")
+    except Exception as e:
+        print(f"❌ ERROR in model prediction: {e}")
+        import traceback
 
-    stateDelta = propagator(controlsTensor)
-    stateDelta = SE2Pose(
-        np.array(
+        traceback.print_exc()
+        print(f"🔍 Model type: {type(optModel)}")
+        print(f"🔍 Model attributes: {dir(optModel)}")
+        return {}
+
+    print(f"\n🔍 Step 7: Creating controls tensor...")
+    try:
+        controlsTensor = torch.tensor(
+            relativeControls, device=optModel.device, dtype=torch.float32
+        )
+        print(f"✅ Created controls tensor with shape: {controlsTensor.shape}")
+    except Exception as e:
+        print(f"❌ ERROR creating controls tensor: {e}")
+        return {}
+
+    print(f"\n🔍 Step 8: Running propagator...")
+    try:
+        stateDelta = propagator(controlsTensor)
+        print(f"✅ Propagator successful")
+        print(f"  - stateDelta shape: {stateDelta.shape}")
+    except Exception as e:
+        print(f"❌ ERROR in propagator: {e}")
+        return {}
+
+    print(f"\n🔍 Step 9: Converting stateDelta to SE2Pose...")
+    try:
+        stateDelta = SE2Pose(
+            np.array(
+                [
+                    stateDelta[0, 0].detach().cpu().numpy(),
+                    stateDelta[0, 1].detach().cpu().numpy(),
+                ]
+            ),
+            stateDelta[0, 2].detach().cpu().numpy(),
+        )
+        print(f"✅ Converted stateDelta to SE2Pose")
+        print(f"  - position: {stateDelta.position}")
+        print(f"  - euler: {stateDelta.euler}")
+    except Exception as e:
+        print(f"❌ ERROR converting stateDelta: {e}")
+        return {}
+
+    print(f"\n🔍 Step 10: Calculating distances...")
+    try:
+        # Calculate distances using vectorized operation
+        relativeDistances = np.array(
             [
-                stateDelta[0, 0].detach().cpu().numpy(),
-                stateDelta[0, 1].detach().cpu().numpy(),
+                stateDelta.distance(relativePose)
+                for relativePose in relativePoses
             ]
-        ),
-        stateDelta[0, 2].detach().cpu().numpy(),
-    )
+        )
+        print(f"✅ Calculated {len(relativeDistances)} distances")
+        print(f"  - min distance: {np.min(relativeDistances):.6f}")
+        print(f"  - max distance: {np.max(relativeDistances):.6f}")
+        print(f"  - mean distance: {np.mean(relativeDistances):.6f}")
+    except Exception as e:
+        print(f"❌ ERROR calculating distances: {e}")
+        return {}
 
-    # Calculate distances using vectorized operation
-    relativeDistances = np.array(
-        [stateDelta.distance(relativePose) for relativePose in relativePoses]
-    )
-
+    print(f"\n🔍 Step 11: Filtering by distance...")
     # Find indices to remove using vectorized boolean indexing
     keepMask = relativeDistances <= maxDistance
     keepIndices = np.where(keepMask)[0]
+    print(f"✅ Filtering results:")
+    print(f"  - total pairs: {len(relativeDistances)}")
+    print(f"  - pairs within maxDistance: {len(keepIndices)}")
+    print(f"  - maxDistance threshold: {maxDistance}")
 
     if len(keepIndices) < len(relativeControls):
         relativeControls = relativeControls[keepIndices]
         relativePoses = [relativePoses[i] for i in keepIndices]
         startGuessArray = startGuessArray[keepIndices]
         numStates = len(keepIndices)
+        print(f"✅ Filtered arrays to {len(keepIndices)} pairs")
+    else:
+        print(
+            f"✅ No filtering needed, keeping all {len(relativeControls)} pairs"
+        )
 
-    return relativeControls, relativePoses
+    print(f"\n🔍 Step 12: Creating pose2control dictionary...")
+    # A dictionary mapping relative poses to their corresponding relative controls
+    pose2control = {}
+    for i, (pose, control) in enumerate(zip(relativePoses, relativeControls)):
+        pose_key = (pose.position[0], pose.position[1], pose.euler[2])
+        pose2control[pose_key] = control
+        if i < 5:  # Print first 5 entries for debugging
+            print(f"  Entry {i}: pose={pose_key} -> control={control}")
+
+    print(
+        f"✅ Created pose2control dictionary with {len(pose2control)} entries"
+    )
+    print(f"🧠 DEBUG: runOptimizer completed successfully")
+
+    return pose2control
 
 
 def createOptimizerThread(
@@ -458,7 +644,9 @@ def createOptimizerThread(
     resultContainer = {"result": None, "completed": False}
 
     def optimizer_wrapper():
+        print(f"\n🧠 DEBUG: optimizer_wrapper started")
         try:
+            print(f"🔍 Calling runOptimizer...")
             result = runOptimizer(
                 nextState,
                 childrenStates,
@@ -466,11 +654,23 @@ def createOptimizerThread(
                 propagator,
                 optModel,
             )
+            print(f"✅ runOptimizer returned: {type(result)}")
+            if isinstance(result, dict):
+                print(f"  - Dictionary has {len(result)} entries")
+            else:
+                print(f"  - Result is not a dictionary: {result}")
+
             resultContainer["result"] = result
             resultContainer["completed"] = True
+            print(f"✅ optimizer_wrapper completed successfully")
         except Exception as e:
+            print(f"❌ ERROR in optimizer_wrapper: {e}")
+            import traceback
+
+            traceback.print_exc()
             resultContainer["error"] = str(e)
             resultContainer["completed"] = True
+            print(f"❌ optimizer_wrapper failed with error")
 
     thread = threading.Thread(target=optimizer_wrapper)
     thread.daemon = True
@@ -508,7 +708,24 @@ def main(
     # Pick the propagator and load the model for the optimizer
     print("Picking the propagator and loading the model for the optimizer")
     propagator = pickPropagator(system, objectShape)
-    optModel = load_opt_model_2(propagator, lr=learningRate, epochs=numEpochs)
+    print(f"✅ Propagator loaded: {type(propagator)}")
+
+    print(f"🔍 Loading optimization model...")
+    try:
+        optModel = load_opt_model_2(
+            propagator, lr=learningRate, epochs=numEpochs
+        )
+        print(f"✅ Optimization model loaded successfully: {type(optModel)}")
+        print(
+            f"🔍 Model attributes: {[attr for attr in dir(optModel) if not attr.startswith('_')]}"
+        )
+    except Exception as e:
+        print(f"❌ ERROR loading optimization model: {e}")
+        import traceback
+
+        traceback.print_exc()
+        print("❌ Cannot continue without optimization model")
+        return
 
     # Plan the initial solution
     print("Planning the initial solution")
@@ -549,36 +766,52 @@ def main(
     print("\n🚀 Starting the execution loop")
 
     while True:
-        print(f"Executing the {index}th iteration")
+        print(f"\n{'='*80}")
+        print(f"🚀 EXECUTING ITERATION {index}")
+        print(f"{'='*80}")
+
         ####################################################
         ############# Execute the nextControl ##############
         ####################################################
-        print("Getting the object information")
+        print("\n📊 STEP 1: Getting current object state...")
         _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
         obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
         currentState = np.array(
             [obj_pose.position[0], obj_pose.position[1], obj_pose.euler[2]]
         )
+        print(
+            f"✅ Current object state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+        )
 
-        # 1.1 Get the first state from solutionInfo and compare
+        # 1.1 Compare planned vs actual state
+        print("\n🔍 STEP 1.1: Comparing planned vs actual state...")
         planned_state = (
-            solutionInfo["states"][0] if solutionInfo.get("states") else None
+            solutionsInfo[0]["states"][0]
+            if solutionsInfo[0].get("states")
+            else None
         )
         if planned_state:
             print(
-                f"Planned first state: x={planned_state[0]:.3f}, y={planned_state[1]:.3f}, yaw={planned_state[2]:.3f}"
+                f"📋 Planned first state: x={planned_state[0]:.3f}, y={planned_state[1]:.3f}, yaw={planned_state[2]:.3f}"
             )
             print(
-                f"Actual object state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+                f"🎯 Actual object state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+            )
+            state_diff = np.array(planned_state) - currentState
+            print(
+                f"📏 State difference: dx={state_diff[0]:.3f}, dy={state_diff[1]:.3f}, dyaw={state_diff[2]:.3f}"
             )
         else:
-            print("No planned state available.")
+            print("❌ No planned state available.")
             break
 
-        # 2. Execute the first control in solutionInfo
-        print(f"Executing control: {nextControl}")
+        ####################################################
+        ############# STEP 2: Execute current control ##############
+        ####################################################
+        print(f"\n🎮 STEP 2: Executing current control...")
+        print(f"🔧 ORIGINAL nextControl (before optimization): {nextControl}")
 
-        # Convert control to end-effector trajectory and execute
+        print("🔄 Converting control to trajectory...")
         client.execute("rotate_scene", params=[None, -obj_pose.euler[2]])
         times, ws_path = generate_path_form_params(
             obj_pose, objectShape, nextControl, tool_offset=tool_offset
@@ -586,128 +819,238 @@ def main(
         traj = ik.ws_path_to_traj(Pose(), times, ws_path)
         waypoints = traj.to_step_waypoints(dt)
         pos_waypoints = np.stack([waypoints[0]], axis=1)
+        print(f"✅ Trajectory generated with {len(pos_waypoints)} waypoints")
 
         # Execute waypoints in parallel thread
-        print("Executing waypoints in parallel thread...")
+        print("🚀 Starting execution thread...")
         executeThread = createExecuteThread(client, pos_waypoints)
         executeThread.start()
+        print("✅ Execution thread started")
 
         ####################################################
-        ########### Run the resolver in parallel ###########
+        ########## STEP 3: Run optimizer in parallel ###########
         ####################################################
-        # Create and start resolver thread (clean one-liner)
-        print("Creating and starting resolver thread")
+        print("\n🧠 STEP 3: Starting optimizer thread...")
+        print(
+            f"🎯 Getting next state from solution: {solutionsInfo[0]['states'][1]}"
+        )
+        nextState = solutionsInfo[0]["states"][1]
+        print(f"🔍 Finding children states for next state...")
+        print(f"🎯 Target state for children search: {nextState}")
+        childrenStates = getChildrenStates(ss, nextState)
+        print(f"✅ Found {len(childrenStates)} children states")
+
+        # Debug: Check if this state exists in the current tree
+        if len(childrenStates) == 0:
+            print(f"⚠️  WARNING: No children found for state {nextState}")
+            print(
+                f"🔍 This might mean the state doesn't exist in the current tree"
+            )
+            print(
+                f"🔍 This could happen if replanning modified the tree structure"
+            )
+
+        print(f"🔧 Using nextControl as initial guess: {nextControl}")
+        optimizerThread = createOptimizerThread(
+            nextState,
+            childrenStates,
+            nextControl,
+            optModel,
+            propagator,
+        )
+        optimizerThread.start()
+        print("✅ Optimizer thread started")
+
+        ####################################################
+        ########### STEP 4: Run replanning in parallel ###########
+        ####################################################
+        print("\n🔄 STEP 4: Starting replanning thread...")
         replanThread = createResolverThread(ss, replanningTime)
         replanThread.start()
+        print("✅ Replanner thread started")
 
         ####################################################
-        ########## Run the optimizer in parallel ###########
+        ########## STEP 5: Wait for all threads ###########
         ####################################################
-        # print("Getting the next state")
-        # nextState = solutionInfo["states"][1]
-        # childrenStates = getChildrenStates(ss, nextState)
-
-        # print("Creating and starting optimizer thread")
-        # optimizerThread = createOptimizerThread(
-        #     nextState,
-        #     childrenStates,
-        #     nextControl,
-        #     optModel,
-        #     propagator,
-        # )
-        # optimizerThread.start()
-
-        # Optimize the contol from the nextState in a parallel thread
-        # Resolve the path for the rest of the path
-        # Get the state estimation
-        # Choose the nextControl based on the current state and the current plan
-
-        # Wait for the resolver to complete
+        print("\n⏳ STEP 5: Waiting for all threads to complete...")
         executeThread.join()
         replanThread.join()
-        # optimizerThread.join()
+        optimizerThread.join()
+        print("✅ All threads completed")
 
-        # Get the waypoint execution result
-        execute_result = executeThread.resultContainer["result"]
-        execute_completed = executeThread.resultContainer["completed"]
-        print(f"Waypoint execution completed: {execute_result}")
+        ####################################################
+        ########## STEP 6: Collect results ###########
+        ####################################################
+        print("\n📊 STEP 6: Collecting thread results...")
+
+        # Get execution result
+        executeResult = executeThread.resultContainer["result"]
+        executeCompleted = executeThread.resultContainer["completed"]
+        print(
+            f"✅ Execution completed: {executeCompleted}, Result: {executeResult}"
+        )
 
         # Get replan result
-        replan_result = replanThread.resultContainer["result"]
-        replan_completed = replanThread.resultContainer["completed"]
-        print(f"Replan completed: {replan_completed}")
+        newSolutionsInfo = replanThread.resultContainer["result"]
+        replanCompleted = replanThread.resultContainer["completed"]
+        print(
+            f"✅ Replan completed: {replanCompleted}, Found {len(newSolutionsInfo) if newSolutionsInfo else 0} solutions"
+        )
 
-        # 3.1 Get updated solutionInfo and print updated states
-        if replan_completed and replan_result:
-            solutionInfo = replan_result
-            print("✅ solutionInfo updated successfully!")
+        # Get optimizer result
+        optimizerResult = optimizerThread.resultContainer["result"]
+        optimizerCompleted = optimizerThread.resultContainer["completed"]
 
-            # Check if solutionInfo has the expected structure
-            if (
-                "state_count" in solutionInfo
-                and "control_count" in solutionInfo
-            ):
+        if optimizerResult is None:
+            print(f"❌ Optimizer failed: result is None")
+            if "error" in optimizerThread.resultContainer:
                 print(
-                    f"Updated solution has {solutionInfo['state_count']} states and {solutionInfo['control_count']} controls"
+                    f"❌ Optimizer error: {optimizerThread.resultContainer['error']}"
                 )
-
-                # Check if there are states to display
-                if "states" in solutionInfo and solutionInfo["states"]:
-                    print("Updated planned states after replan:")
-                    for i, state in enumerate(solutionInfo["states"]):
-                        print(
-                            f"  State {i}: x={state[0]:.3f}, y={state[1]:.3f}, yaw={state[2]:.3f}"
-                        )
-                else:
-                    print("⚠️ No states available in updated solution")
-
-                # Check if there are controls to display
-                if "controls" in solutionInfo and solutionInfo["controls"]:
-                    print("Updated controls after replan:")
-                    for i, control in enumerate(solutionInfo["controls"]):
-                        print(f"  Control {i}: {control}")
-                else:
-                    print("⚠️ No controls available in updated solution")
-                    print(
-                        "❌ Cannot continue without controls. Breaking loop."
-                    )
-                    break
-            else:
-                print("❌ Updated solutionInfo has unexpected structure")
-                print(f"Available keys: {list(solutionInfo.keys())}")
-                break
+            print(f"🔄 Using original control without optimization")
+            # Continue with the original control instead of breaking
+            optimizerResult = {}  # Empty dict to continue
+        elif isinstance(optimizerResult, dict):
+            print(
+                f"✅ Optimizer completed: {optimizerCompleted}, Generated {len(optimizerResult)} pose-control pairs"
+            )
         else:
-            print("❌ No updated solution found after replan.")
-            break
+            print(
+                f"❌ Optimizer returned unexpected type: {type(optimizerResult)}"
+            )
+            print(f"🔄 Using original control without optimization")
+            optimizerResult = {}  # Empty dict to continue
 
-        # 3.2 Get and print the current object state after execution
+        ####################################################
+        ########## STEP 7: Get updated state ###########
+        ####################################################
+        print("\n📊 STEP 7: Getting updated object state...")
         _, _, obj_rob_pos, obj_rob_quat, _ = client.execute("get_obj_info", 0)
         obj_pose = Pose(obj_rob_pos[0], obj_rob_quat[0])
         currentState = np.array(
             [obj_pose.position[0], obj_pose.position[1], obj_pose.euler[2]]
         )
         print(
-            f"Current object state after execution: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+            f"✅ Updated object state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
         )
 
-        # Check for goal
+        ####################################################
+        ########## STEP 8: Check goal condition ###########
+        ####################################################
+        print("\n🎯 STEP 8: Checking goal condition...")
         goal_x, goal_y = goalState[0], goalState[1]
-        distance_to_goal = (
-            (currentState[0] - goal_x) ** 2 + (currentState[1] - goal_y) ** 2
-        ) ** 0.5
-        print(f"Distance to goal: {distance_to_goal:.3f}")
+        distance_to_goal = arrayDistance(
+            currentState[:2], [goal_x, goal_y], system="SE2Position"
+        )
+        print(f"📏 Distance to goal: {distance_to_goal:.3f}")
         if distance_to_goal < 0.05:
             print("🎉 SUCCESS! Reached goal!")
             break
 
-        # Update nextControl for next iteration
-        if solutionInfo.get("controls") and len(solutionInfo["controls"]) > 0:
-            nextControl = solutionInfo["controls"][0]
-            print(f"🔄 Updated nextControl for next iteration: {nextControl}")
-        else:
-            print("❌ No controls available in updated solution.")
-            break
+        ####################################################
+        ########## STEP 9: Update solution costs ###########
+        ####################################################
+        print("\n💰 STEP 9: Updating solution costs...")
+        print(f"📊 Updating costs for {len(newSolutionsInfo)} solutions...")
+        for i, solution in enumerate(newSolutionsInfo):
+            # Get the distance between the first two state in the solution
+            currentFirstCost = arrayDistance(
+                solution["states"][0], solution["states"][1], system="SE2"
+            )
+            nextCandidateState = solution["states"][1]
+            actualFirstCost = arrayDistance(
+                currentState, nextCandidateState, system="SE2"
+            )
+            old_cost = solution["cost"]
+            # Modify the new cost of the solution
+            solution["cost"] = (
+                solution["cost"] - currentFirstCost + actualFirstCost
+            )
+            print(
+                f"  Solution {i}: Cost updated from {old_cost:.5f} to {solution['cost']:.5f}"
+            )
 
+        ####################################################
+        ########## STEP 10: Find best solution ###########
+        ####################################################
+        print("\n🏆 STEP 10: Finding best solution...")
+        bestSolution = min(newSolutionsInfo, key=lambda x: x["cost"])
+        print(f"✅ Best solution cost: {bestSolution['cost']:.5f}")
+        print(
+            f"📋 Best solution first state: x={bestSolution['states'][0][0]:.3f}, y={bestSolution['states'][0][1]:.3f}, yaw={bestSolution['states'][0][2]:.3f}"
+        )
+        print(
+            f"🔍 Current state: x={currentState[0]:.3f}, y={currentState[1]:.3f}, yaw={currentState[2]:.3f}"
+        )
+
+        ####################################################
+        ########## STEP 11: Calculate relative pose ###########
+        ####################################################
+        print("\n🧮 STEP 11: Calculating relative pose...")
+        currentStateSE2 = SE2Pose(currentState[:2], currentState[2])
+        bestNextStateSE2 = SE2Pose(
+            bestSolution["states"][1][:2], bestSolution["states"][1][2]
+        )
+        relativePose = currentStateSE2.invert @ bestNextStateSE2
+        print(
+            f"✅ Relative pose: x={relativePose.position[0]:.3f}, y={relativePose.position[1]:.3f}, yaw={relativePose.euler[2]:.3f}"
+        )
+
+        ####################################################
+        ########## STEP 12: Find optimal control ###########
+        ####################################################
+        print("\n🎯 STEP 12: Finding optimal control from optimizer...")
+        # Convert the relative pose to a tuple key to look up in the optimizer result
+        actualRelativePose = (
+            relativePose.position[0],
+            relativePose.position[1],
+            relativePose.euler[2],
+        )
+        print(
+            f"🔍 Looking for control matching relative pose: {actualRelativePose}"
+        )
+
+        # Find the closest matching pose in the optimizer result
+        closestControl = None
+        minDistance = float("inf")
+        print(
+            f"🔍 Searching through {len(optimizerResult) if optimizerResult else 0} optimizer results..."
+        )
+
+        if len(optimizerResult) == 0:
+            print("⚠️  No optimizer results available, using original control")
+            closestControl = None
+        else:
+            for pose_key in optimizerResult.keys():
+                # Calculate distance between the target relative pose and this pose key based on ompl
+                pose_distance = arrayDistance(
+                    actualRelativePose, pose_key, system="SE2"
+                )
+                if pose_distance < minDistance:
+                    minDistance = pose_distance
+                    closestControl = optimizerResult[pose_key]
+                    print(
+                        f"  🎯 New closest: distance={pose_distance:.5f}, pose={pose_key}, control={closestControl}"
+                    )
+
+        if closestControl is not None:
+            # Use the closest matching control
+            old_control = (
+                nextControl.copy()
+                if hasattr(nextControl, "copy")
+                else nextControl
+            )
+            nextControl = closestControl
+            print(
+                f"✅ OPTIMIZED nextControl (after optimization): {nextControl}"
+            )
+            print(f"🔄 Control change: {old_control} → {nextControl}")
+            print(f"📏 Closest pose distance: {minDistance:.5f}")
+        else:
+            print("⚠️  Using original control (no optimization applied)")
+            # Continue with the original control
+
+        print(f"\n✅ ITERATION {index} COMPLETED")
         index += 1
 
     print(f"\n🏁 Execution process completed!")
