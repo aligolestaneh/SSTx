@@ -7,9 +7,6 @@
 #define OMPL_CONTROL_PLANNERS_SST_FUSION_
 
 #include <vector>
-#include <chrono>
-#include <atomic>
-#include <mutex>
 #include <limits>
 #include "ompl/control/planners/PlannerIncludes.h"
 #include "ompl/datastructures/NearestNeighbors.h"
@@ -63,6 +60,16 @@ namespace ompl
 
 
             void getPlannerData(base::PlannerData &data) const override;
+
+            /** \brief Dummy cost tracking thread function for Python binding compatibility */
+            void costTrackingThread(const std::string& filename, 
+                                   std::chrono::time_point<std::chrono::system_clock> startTime) const;
+
+            /** \brief Get all solutions found during planning */
+            const std::vector<ompl::base::PlannerSolution>& getAllSolutions() const;
+
+            /** \brief Clear all stored solutions */
+            void clearAllSolutions();
 
             /** \brief Clear datastructures. Call this function if the
                 input data to the planner has changed and you do not
@@ -243,10 +250,6 @@ namespace ompl
             /** \brief Free the memory allocated by this planner */
             void freeMemory();
 
-            /** \brief Thread function for cost tracking */
-            void costTrackingThread(const std::string& filename, 
-                                  std::chrono::high_resolution_clock::time_point startTime) const;
-
             /** \brief Compute distance between motions (actually distance between contained states) */
             double distanceFunction(const Motion *a, const Motion *b) const
             {
@@ -296,14 +299,11 @@ namespace ompl
             ompl::base::Cost bestSolutionCost_{std::numeric_limits<double>::infinity()};
             std::shared_ptr<PathControl> bestSolutionPath_;
 
+            /** \brief Vector to store all planner solutions found during planning */
+            std::vector<ompl::base::PlannerSolution> allSolutions_;
+
             /** \brief The optimization objective. */
             base::OptimizationObjectivePtr opt_;
-
-            /** \brief Thread-safe tracking for cost logging */
-            mutable std::atomic<double> currentBestCost_;
-            mutable std::atomic<bool> hasExactSolution_;
-            mutable std::atomic<bool> planningActive_;
-            mutable std::mutex costTrackingMutex_;
 
         };
     }

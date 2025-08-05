@@ -4,13 +4,10 @@
 
 #include <set>
 #include <queue>
-#include <mutex>
-#include <chrono>
-#include <thread>
 #include <limits>
-#include <atomic>
-#include <fstream>
 #include <functional>
+#include <chrono>
+#include <algorithm>
 #include "ompl/base/goals/GoalRegion.h"
 #include "ompl/base/ProblemDefinition.h"
 #include "ompl/tools/config/SelfConfig.h"
@@ -29,11 +26,6 @@ ompl::control::Fusion::Fusion(const SpaceInformationPtr &si) : base::Planner(si,
     prevSolution_.clear();
     prevSolutionControls_.clear();
     prevSolutionSteps_.clear();
-
-    // Initialize thread-safe tracking variables
-    currentBestCost_.store(std::numeric_limits<double>::infinity());
-    hasExactSolution_.store(false);
-    planningActive_.store(false);
 
     Planner::declareParam<double>("goal_bias", this, &Fusion::setGoalBias, &Fusion::getGoalBias, "0.:.05:1.");
     Planner::declareParam<double>("selection_radius", this, &Fusion::setSelectionRadius, &Fusion::getSelectionRadius, "0.:.1:"
@@ -88,54 +80,7 @@ void ompl::control::Fusion::setup()
     prevSolutionCost_ = opt_->infiniteCost();
 }
 
-void ompl::control::Fusion::costTrackingThread(const std::string& filename, 
-                                               std::chrono::high_resolution_clock::time_point startTime) const
-{
-    std::ofstream logFile(filename, std::ios::out);
-    logFile << "# Time(s) Cost Type\n";
-    
-    const double samplingInterval = 0.01; // 10ms sampling interval
-    auto lastSampleTime = startTime;
-    
-    while (planningActive_.load()) {
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        auto elapsed = std::chrono::duration<double>(currentTime - startTime).count();
-        
-        // Sample at regular intervals
-        if (std::chrono::duration<double>(currentTime - lastSampleTime).count() >= samplingInterval) {
-            double currentCost = currentBestCost_.load();
-            bool hasExact = hasExactSolution_.load();
-            
-            if (currentCost == std::numeric_limits<double>::infinity()) {
-                logFile << elapsed << " inf none\n";
-            } else {
-                std::string solutionType = hasExact ? "exact" : "approximate";
-                logFile << elapsed << " " << currentCost << " " << solutionType << "\n";
-            }
-            
-            logFile.flush();
-            lastSampleTime = currentTime;
-        }
-        
-        // Sleep for a short time to avoid busy waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    
-    // Final sample when planning stops
-    auto finalTime = std::chrono::high_resolution_clock::now();
-    auto finalElapsed = std::chrono::duration<double>(finalTime - startTime).count();
-    double finalCost = currentBestCost_.load();
-    bool finalHasExact = hasExactSolution_.load();
-    
-    if (finalCost == std::numeric_limits<double>::infinity()) {
-        logFile << finalElapsed << " inf none\n";
-    } else {
-        std::string solutionType = finalHasExact ? "exact" : "approximate";
-        logFile << finalElapsed << " " << finalCost << " " << solutionType << "\n";
-    }
-    
-    logFile.close();
-}
+
 
 void ompl::control::Fusion::clear()
 {
@@ -150,10 +95,9 @@ void ompl::control::Fusion::clear()
     if (opt_)
         prevSolutionCost_ = opt_->infiniteCost();
     
-    // Reset tracking variables
-    currentBestCost_.store(std::numeric_limits<double>::infinity());
-    hasExactSolution_.store(false);
-    planningActive_.store(false);
+    // Clear all stored solutions
+    allSolutions_.clear();
+
 }
 
 void ompl::control::Fusion::freeMemory()
@@ -291,24 +235,6 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
 
     unsigned iterations = 0;
     
-    // Start time-based cost tracking
-    auto start_time = std::chrono::high_resolution_clock::now();
-    
-    // Initialize tracking variables
-    if (prevSolutionCost_.value() < opt_->infiniteCost().value()) {
-        // We have a previous solution
-        currentBestCost_.store(prevSolutionCost_.value());
-        hasExactSolution_.store(true);  // Assume previous solution was exact
-    } else {
-        // No previous solution
-        currentBestCost_.store(std::numeric_limits<double>::infinity());
-        hasExactSolution_.store(false);
-    }
-    
-    // Start the cost tracking thread
-    planningActive_.store(true);
-    std::thread tracker(&Fusion::costTrackingThread, this, "fusion_solutions.txt", start_time);
-
     while (ptc == false)
     {
         /* sample random state (with goal biasing) */
@@ -378,9 +304,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     prevSolution_.push_back(si_->cloneState(solTrav->state_));
                     prevSolutionCost_ = solution->accCost_;
 
-                    // Update thread-safe tracking variables
-                    currentBestCost_.store(solution->accCost_.value());
-                    hasExactSolution_.store(true);
+
 
                     OMPL_INFORM("Found solution with cost %.4f", solution->accCost_.value());
                     // TODO: Update bestSolutionCost_ and bestSolutionPath_
@@ -393,6 +317,9 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     ompl::base::PlannerSolution path2solution(path);
                     path2solution.cost_ = solution->accCost_;
                     pdef_->addSolutionPath(path2solution);
+
+                    // Store the solution in our vector for tracking
+                    allSolutions_.push_back(path2solution);
 
                     if (intermediateSolutionCallback)
                     {
@@ -440,13 +367,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     }
                     prevSolution_.push_back(si_->cloneState(solTrav->state_));
 
-                    // Update thread-safe tracking variables for approximate solution
-                    double currentCost = currentBestCost_.load();
-                    if (opt_->isCostBetterThan(motion->accCost_, base::Cost(currentCost)) || 
-                        currentCost == std::numeric_limits<double>::infinity()) {
-                        currentBestCost_.store(motion->accCost_.value());
-                        hasExactSolution_.store(false); // This is an approximate solution
-                    }
+
                 }
 
                 if (oldRep != rmotion)
@@ -502,9 +423,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
         siC_->freeControl(rmotion->control_);
     delete rmotion;
 
-    // Stop the cost tracking thread
-    planningActive_.store(false);
-    tracker.join();
+
 
     OMPL_INFORM("%s: Created %u states in %u iterations", getName().c_str(), nn_->size(), iterations);
 
@@ -763,20 +682,37 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
 {
     checkValidity();
     OMPL_INFORM("Starting: replan function");
-    // 1. Get the second state in the solution path
-    OMPL_INFORM("Starting: Get the second state in the solution path");
-    ompl::base::PathPtr path = pdef_->getSolutionPath();
-    auto pathControl = std::dynamic_pointer_cast<PathControl>(path);
-    OMPL_INFORM("Finished: Get the second state in the solution path");
+    
+    // 1. Get the best solution from allSolutions_ before clearing
+    OMPL_INFORM("Getting best solution from allSolutions_ (has %d solutions)", (int)allSolutions_.size());
+    if (allSolutions_.empty()) {
+        OMPL_WARN("%s: No solutions in allSolutions_ for replan.", getName().c_str());
+        return base::PlannerStatus::ABORT;
+    }
+    
+    // Find the best solution (lowest cost) from allSolutions_
+    auto bestSolutionIt = std::min_element(allSolutions_.begin(), allSolutions_.end(),
+        [](const ompl::base::PlannerSolution& a, const ompl::base::PlannerSolution& b) {
+            return a.cost_.value() < b.cost_.value();
+        });
+    
+    auto pathControl = std::dynamic_pointer_cast<PathControl>(bestSolutionIt->path_);
+    OMPL_INFORM("Using best solution from allSolutions_ with cost %.4f and %d states", 
+                bestSolutionIt->cost_.value(), 
+                pathControl ? pathControl->getStateCount() : 0);
+    
+    // Clear all previous solutions after getting the best one
+    OMPL_INFORM("Clearing all previous solutions from allSolutions_");
+    allSolutions_.clear();
 
     if (!pathControl || pathControl->getStateCount() < 2)
     {
-        OMPL_WARN("%s: No valid solution path with at least 2 states available for replan.", getName().c_str());
+        OMPL_WARN("%s: Best solution from allSolutions_ has less than 2 states, cannot replan.", getName().c_str());
         return base::PlannerStatus::ABORT;
     }
     
     ompl::base::State *newState = pathControl->getState(1);
-    OMPL_INFORM("Replan: Starting from second state in solution path");
+    OMPL_INFORM("Replan: Starting from second state of best solution from allSolutions_");
     
     // 2. Find the motion corresponding to this state (newStart)
     OMPL_INFORM("Starting: Find the motion corresponding to the new state");
@@ -968,18 +904,49 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
     pdef_->addStartState(newState);
     OMPL_INFORM("Finished: Set the start state in the problem definition");
     
-    // Clear existing solution paths and add the updated path as a PlannerSolution (with cost)
+    // Create a shortened path from the current solution by removing the first state/control
+    OMPL_INFORM("Creating shortened path by removing first state/control from current solution");
+    auto shortenedPath = std::make_shared<PathControl>(si_);
+    
+    // Add all states and controls starting from index 1 (skip the first state/control)
+    for (size_t i = 1; i < pathControl->getStateCount(); ++i)
+    {
+        if (i == 1)
+        {
+            // First state in shortened path (was second state in original path)
+            shortenedPath->append(pathControl->getState(i));
+        }
+        else if (i < pathControl->getStateCount())
+        {
+            // Add control and state for remaining segments
+            shortenedPath->append(pathControl->getState(i), 
+                               pathControl->getControl(i-1),
+                               pathControl->getControlDuration(i-1));
+        }
+    }
+    
+    OMPL_INFORM("Shortened path created with %d states and %d controls", 
+                shortenedPath->getStateCount(), shortenedPath->getControlCount());
+    
+    // Keep the original cost from the best solution (don't recalculate)
+    base::Cost shortenedCost = bestSolutionIt->cost_;
+    
+    // Clear existing solution paths and add the shortened path as a PlannerSolution
     OMPL_INFORM("Clearing all existing solution paths before solve");
     pdef_->clearSolutionPaths();
-    OMPL_INFORM("Creating PlannerSolution for bestSolutionPath_");
-    ompl::base::PlannerSolution path2solution(bestSolutionPath_);
-    OMPL_INFORM("Setting cost of bestSolutionPath_ to %.4f", bestSolutionCost_.value());
-    path2solution.cost_ = bestSolutionCost_;
-    OMPL_INFORM("Adding bestSolutionPath_ as PlannerSolution to the problem definition");
+    OMPL_INFORM("Creating PlannerSolution for shortened path");
+    ompl::base::PlannerSolution path2solution(shortenedPath);
+    OMPL_INFORM("Setting cost of shortened path to %.4f", shortenedCost.value());
+    path2solution.cost_ = shortenedCost;
+    OMPL_INFORM("Adding shortened path as PlannerSolution to the problem definition");
     pdef_->addSolutionPath(path2solution);
-    OMPL_INFORM("Finished: Add bestSolutionPath_ as PlannerSolution");
-    OMPL_INFORM("Replan: bestSolutionPath_ - removed first state/control, now has %d states and %d controls", 
-                bestSolutionPath_->getStateCount(), bestSolutionPath_->getControlCount());
+    OMPL_INFORM("Finished: Add shortened path as PlannerSolution");
+    
+    // Store the solution in our vector for tracking
+    allSolutions_.push_back(path2solution);
+    
+    OMPL_INFORM("Replan: shortened path - removed first state/control, now has %d states and %d controls", 
+                shortenedPath->getStateCount(), shortenedPath->getControlCount());
 
     // 13. Run the solve function to continue planning from the new start state
     OMPL_INFORM("Starting: Run solve to continue planning from new start state");
@@ -1034,4 +1001,22 @@ void ompl::control::Fusion::getPlannerData(base::PlannerData &data) const
         else
             data.addStartVertex(base::PlannerDataVertex(m->state_));
     }
+}
+
+void ompl::control::Fusion::costTrackingThread(const std::string& filename, 
+                                               std::chrono::time_point<std::chrono::system_clock> startTime) const
+{
+    // Dummy implementation for Python binding compatibility
+    // This function was removed but Python bindings still expect it
+    // Do nothing - cost tracking functionality has been removed
+}
+
+const std::vector<ompl::base::PlannerSolution>& ompl::control::Fusion::getAllSolutions() const
+{
+    return allSolutions_;
+}
+
+void ompl::control::Fusion::clearAllSolutions()
+{
+    allSolutions_.clear();
 }

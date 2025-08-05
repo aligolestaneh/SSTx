@@ -7,16 +7,16 @@ system: "pushing"
 objectName: "crackerBox"
 
 # Start state as a list [x, y, theta] for SE2 space
-startState: [0.4, -0.7, 0.0]
+startState: [0.0, -0.7, 0.0]
 
 # Goal state as a list [x, y, theta] for SE2 space  
 goalState: [-0.4, -0.7, 0.0]
 
 # Planning time in seconds
-planningTime: 10.0
+planningTime: 5.0
 
 # Replanning time in seconds (for future use)
-replanningTime: 3.0
+replanningTime: 4.0
 
 # Planner name (e.g., "fusion", "sst", "rrt")
 plannerName: "fusion"
@@ -27,3 +27,12 @@ visualize: false
 # Optimization model parameters
 learning_rate: 0.001
 num_epochs: 200
+
+# Sampling configuration for optimization
+sampling:
+  # Number of random states to sample for optimization
+  num_states: 2000
+  # Standard deviation for position sampling (x, y)
+  position_std: 0.005
+  # Standard deviation for rotation sampling (yaw)
+  rotation_std: 0.1

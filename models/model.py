@@ -361,7 +361,7 @@ class OptTorchModel_2:
             factor=self.scheduler_factor,
             patience=self.scheduler_patience,
             min_lr=self.min_lr,
-            verbose=self.verbose > 0,
+            # verbose=self.verbose > 0,
         )
 
         # Track losses and best results
@@ -437,6 +437,11 @@ class OptTorchModel_2:
         _, best_indices = torch.min(all_loss, dim=1)
         sample_indices = torch.arange(n_sample, device=start_x.device)
         best_x = start_x[sample_indices, best_indices, :]
+
+        # Final clamping to ensure values stay within bounds
+        if x_min is not None and x_max is not None:
+            best_x = torch.clamp(best_x, min=x_min, max=x_max)
+
         return best_x.cpu().numpy(), best_loss
 
     def score(self, x, y, **kwargs):

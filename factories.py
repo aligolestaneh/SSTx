@@ -101,6 +101,59 @@ def pickStartState(system: str, space: ob.StateSpace, startState: np.ndarray):
         raise ValueError(f"Unknown system for start state: {system}")
 
 
+class SE2GoalState(ob.GoalState):
+    def __init__(self, si, goal, ranges):
+        print(f"🔍 DEBUG: SE2GoalState.__init__ called")
+        print(f"  - si type: {type(si)}")
+        print(f"  - goal type: {type(goal)}, value: {goal}")
+        print(f"  - ranges type: {type(ranges)}, value: {ranges}")
+
+        super().__init__(si)
+        self.ranges = ranges
+
+        # Create a proper state object and set its values
+        goal_state = ob.State(si.getStateSpace())
+        goal_state().setX(goal[0])
+        goal_state().setY(goal[1])
+        goal_state().setYaw(goal[2])
+        self.setState(goal_state)
+        self.setThreshold(0.01)
+
+        print(f"✅ SE2GoalState initialized successfully")
+
+    def distanceGoal(self, state: ob.State) -> float:
+        try:
+            x = state.getX()
+            y = state.getY()
+            yaw = state.getYaw()
+            goal_x = self.getState().getX()
+            goal_y = self.getState().getY()
+            goal_yaw = self.getState().getYaw()
+
+            # distance to goal in SE2 space
+            x_dist = x - goal_x
+            y_dist = y - goal_y
+            yaw_dist = yaw - goal_yaw
+            yaw_dist = (yaw_dist + np.pi) % (2 * np.pi) - np.pi
+
+            # if in range, return a value smaller than 0.01
+            # to indicate success, since threshold is by set to 0.01
+            if (
+                self.ranges[0][0] <= x_dist <= self.ranges[0][1]
+                and self.ranges[1][0] <= y_dist <= self.ranges[1][1]
+                and self.ranges[2][0] <= yaw_dist <= self.ranges[2][1]
+            ):
+                return 0
+            else:
+                dist = np.sqrt(x_dist**2 + y_dist**2 + yaw_dist**2)
+                return dist
+        except Exception as e:
+            print(f"❌ ERROR in distanceGoal: {e}")
+            print(f"  - state type: {type(state)}")
+            print(f"  - self.getState() type: {type(self.getState())}")
+            raise e
+
+
 def pickGoalState(
     system: str,
     goalState: np.ndarray,
@@ -108,21 +161,37 @@ def pickGoalState(
     objectShape: np.ndarray,
     ss: oc.SimpleSetup,
 ):
+    print(f"🔍 DEBUG: pickGoalState called")
+    print(f"  - system: {system}")
+    print(f"  - goalState: {goalState}")
+    print(f"  - startState: {startState}")
+    print(f"  - objectShape: {objectShape}")
+    print(f"  - ss type: {type(ss)}")
+
     if system == "pushing":
-        # goal_state = SE2GoalState(
+        print(f"🔍 Creating SE2GoalState for pushing system...")
+        try:
+            goal_state = SE2GoalState(
+                ss.getSpaceInformation(),
+                np.array([goalState[0], goalState[1], goalState[2]]),
+                np.array([[-0.05, 0.05], [-0.05, 0.05], [-0.1, 0.1]]),
+            )
+            print(f"✅ SE2GoalState created successfully")
+            return goal_state
+        except Exception as e:
+            print(f"❌ ERROR creating SE2GoalState: {e}")
+            import traceback
+
+            traceback.print_exc()
+            raise e
+        # edge = 0.725
+        # goal_state = GraspableRegion(
         #     ss.getSpaceInformation(),
-        #     np.array([goalState[0], goalState[1], goalState[2]]),
-        #     np.array([[-0.05, 0.05], [-0.05, 0.05], [-0.1, 0.1]]),
+        #     np.array([edge, startState[1], 0.0]),
+        #     objectShape,
+        #     edge,
         # )
         # return goal_state
-        edge = 0.725
-        goal_state = GraspableRegion(
-            ss.getSpaceInformation(),
-            np.array([edge, startState[1], 0.0]),
-            objectShape,
-            edge,
-        )
-        return goal_state
     else:
         raise ValueError(f"Unknown system for goal state: {system}")
 
@@ -175,43 +244,7 @@ class ControlSampler(oc.ControlSampler):
         control[1] *= np.where(mask, self.obj_shape[1], self.obj_shape[0])
 
 
-class SE2GoalState(ob.GoalState):
-    def __init__(self, si, goal, ranges):
-        super().__init__(si)
-        self.ranges = ranges
-        # Create a proper state object and set its values
-        goal_state = ob.State(si.getStateSpace())
-        goal_state().setX(goal[0])
-        goal_state().setY(goal[1])
-        goal_state().setYaw(goal[2])
-        self.setState(goal_state)
-        self.setThreshold(0.01)
-
-    def distanceGoal(self, state: ob.State) -> float:
-        x = state[0].getX()
-        y = state[0].getY()
-        yaw = state[0].getYaw()
-        goal_x = self.getState()[0].getX()
-        goal_y = self.getState()[0].getY()
-        goal_yaw = self.getState()[0].getYaw()
-
-        # distance to goal in SE2 space
-        x_dist = x - goal_x
-        y_dist = y - goal_y
-        yaw_dist = yaw - goal_yaw
-        yaw_dist = (yaw_dist + np.pi) % (2 * np.pi) - np.pi
-
-        # if in range, return a value smaller than 0.01
-        # to indicate success, since threshold is by set to 0.01
-        if (
-            self.ranges[0][0] <= x_dist <= self.ranges[0][1]
-            and self.ranges[1][0] <= y_dist <= self.ranges[1][1]
-            and self.ranges[2][0] <= yaw_dist <= self.ranges[2][1]
-        ):
-            return 0
-        else:
-            dist = np.sqrt(x_dist**2 + y_dist**2 + 0.5 * yaw_dist**2)
-            return dist
+# Removed duplicate SE2GoalState class definition
 
 
 def plan(
