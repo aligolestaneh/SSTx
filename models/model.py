@@ -315,7 +315,9 @@ class OptTorchModel_2:
         # This model uses existing model, so no need to train
         return [], []
 
-    def predict(self, y, start_guess, x_min=None, x_max=None, **kwargs):
+    def predict(
+        self, y, start_guess, x_min=None, x_max=None, plot=True, **kwargs
+    ):
         """Predict the output with desired output y"""
         import matplotlib.pyplot as plt
 
@@ -419,14 +421,33 @@ class OptTorchModel_2:
                     f"Loss: {loss.item():.4f} | LR: {scheduler._last_lr[0]:.2e}"
                 )
 
-        # Plot the loss curve
-        # plt.figure(figsize=(10, 5))
-        # plt.plot(losses)
-        # plt.title("Optimization Loss Over Time")
-        # plt.xlabel("Epoch")
-        # plt.ylabel("Loss")
-        # plt.grid(True)
-        # plt.show()
+        # Plot the loss curve (save to file when plot=False, show when plot=True)
+        # if plot or len(losses) > 0:  # Always create the plot
+        #     import matplotlib
+
+        #     if not plot:
+        #         matplotlib.use(
+        #             "Agg"
+        #         )  # Use non-interactive backend for file saving
+
+        #     plt.figure(figsize=(10, 5))
+        #     plt.plot(losses)
+        #     plt.title("Optimization Loss Over Time")
+        #     plt.xlabel("Epoch")
+        #     plt.ylabel("Loss")
+        #     plt.grid(True)
+
+        #     if plot:
+        #         plt.show()
+        # else:
+        #     # Save to file with timestamp
+        #     import datetime
+
+        #     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        #     filename = f"optimization_loss_{timestamp}.png"
+        #     plt.savefig(filename, dpi=150, bbox_inches="tight")
+        #     print(f"     - Loss plot saved to: {filename}")
+        #     plt.close()  # Close the figure to free memory
 
         # Use best result found during optimization
         if best_x is not None:

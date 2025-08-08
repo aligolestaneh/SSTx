@@ -235,7 +235,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
 
     unsigned iterations = 0;
     
-    while (ptc == false)
+    while (ptc == false || solution == nullptr)
     {
         /* sample random state (with goal biasing) */
         if (goal_s && rng_.uniform01() < goalBias_ && goal_s->canSample())

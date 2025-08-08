@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+
 try:
     from ompl import base as ob
     from ompl import control as oc
@@ -368,3 +369,81 @@ def draw_rectangle(
     # Add text label
     if label is not None:
         plt.text(x, y, label, ha="center", va="center", color="black")
+
+
+def state2list(state, state_type: str) -> list:
+
+    if state_type.upper() == "SE2":
+        # SE2 state: x, y, theta
+        return [state.getX(), state.getY(), state.getYaw()]
+
+    elif state_type.upper() == "SE3":
+        # SE3 state: x, y, z, qw, qx, qy, qz (position + quaternion)
+        return [
+            state.getX(),
+            state.getY(),
+            state.getZ(),
+            state.getRotation().w,
+            state.getRotation().x,
+            state.getRotation().y,
+            state.getRotation().z,
+        ]
+
+    else:
+        print(
+            f"Warning: Unknown state type '{state_type}'. Returning empty list."
+        )
+        return []
+
+
+def isSE2Equal(state1, state2, tolerance=1e-6):
+    diff_x = abs(state1[0] - state2[0])
+    diff_y = abs(state1[1] - state2[1])
+    diff_yaw = abs(state1[2] - state2[2])
+
+    return diff_x < tolerance and diff_y < tolerance and diff_yaw < tolerance
+
+
+def arrayDistance(array1, array2, system: str):
+    # Convert SE2Pose objects to arrays if needed
+    if hasattr(array1, "flat"):  # SE2Pose object
+        array1 = array1.flat
+    if hasattr(array2, "flat"):  # SE2Pose object
+        array2 = array2.flat
+
+    if system == "SE2":
+        # Calculate position distance
+        pos_distance = np.sqrt(
+            (array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2
+        )
+
+        # Calculate angular distance with proper wrapping
+        # Compute the shortest angular difference using the standard formula
+        yaw_diff = abs((array1[2] - array2[2] + np.pi) % (2 * np.pi) - np.pi)
+
+        # Combine position and angular distances
+        # Using a weighted combination similar to OMPL's SE2StateSpace
+        return np.sqrt(pos_distance**2 + 0.5 * yaw_diff**2)
+    elif system == "SE2Position":
+        return np.sqrt(
+            (array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2
+        )
+    else:
+        raise ValueError(f"Invalid system: {system}")
+
+
+def log(message, log_type="info"):
+    colors = {
+        "error": "\033[91m",  # Red
+        "warning": "\033[93m",  # Yellow
+        "info": "\033[0m",  # Default
+        "success": "\033[92m",  # Green
+    }
+
+    reset = "\033[0m"
+    color_code = colors.get(log_type.lower(), colors["info"])
+
+    if log_type.lower() == "info":
+        print(message)
+    else:
+        print(f"{color_code}{message}{reset}")

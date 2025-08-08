@@ -103,11 +103,6 @@ def pickStartState(system: str, space: ob.StateSpace, startState: np.ndarray):
 
 class SE2GoalState(ob.GoalState):
     def __init__(self, si, goal, ranges):
-        print(f"🔍 DEBUG: SE2GoalState.__init__ called")
-        print(f"  - si type: {type(si)}")
-        print(f"  - goal type: {type(goal)}, value: {goal}")
-        print(f"  - ranges type: {type(ranges)}, value: {ranges}")
-
         super().__init__(si)
         self.ranges = ranges
 
@@ -118,8 +113,6 @@ class SE2GoalState(ob.GoalState):
         goal_state().setYaw(goal[2])
         self.setState(goal_state)
         self.setThreshold(0.01)
-
-        print(f"✅ SE2GoalState initialized successfully")
 
     def distanceGoal(self, state: ob.State) -> float:
         try:
@@ -161,25 +154,15 @@ def pickGoalState(
     objectShape: np.ndarray,
     ss: oc.SimpleSetup,
 ):
-    print(f"🔍 DEBUG: pickGoalState called")
-    print(f"  - system: {system}")
-    print(f"  - goalState: {goalState}")
-    print(f"  - startState: {startState}")
-    print(f"  - objectShape: {objectShape}")
-    print(f"  - ss type: {type(ss)}")
-
     if system == "pushing":
-        print(f"🔍 Creating SE2GoalState for pushing system...")
         try:
             goal_state = SE2GoalState(
                 ss.getSpaceInformation(),
                 np.array([goalState[0], goalState[1], goalState[2]]),
                 np.array([[-0.05, 0.05], [-0.05, 0.05], [-0.1, 0.1]]),
             )
-            print(f"✅ SE2GoalState created successfully")
             return goal_state
         except Exception as e:
-            print(f"❌ ERROR creating SE2GoalState: {e}")
             import traceback
 
             traceback.print_exc()

@@ -25,14 +25,16 @@ plannerName: "fusion"
 visualize: false
 
 # Optimization model parameters
-learning_rate: 0.001
-num_epochs: 200
+learning_rate: 0.005
+num_epochs: 500
 
 # Sampling configuration for optimization
 sampling:
   # Number of random states to sample for optimization
   num_states: 2000
+  # Maximum distance for optimization sampling
+  max_distance: 0.025
   # Standard deviation for position sampling (x, y)
   position_std: 0.005
   # Standard deviation for rotation sampling (yaw)
-  rotation_std: 0.1
+  rotation_std: 0.05
