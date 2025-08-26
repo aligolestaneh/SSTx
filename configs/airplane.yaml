@@ -1,0 +1,55 @@
+# Dublin Airplane Configuration File
+# SE3 quadrotor dynamics with 4 RPM control inputs
+
+# System type - dublin airplane with SE3 state space (6DOF)
+system: "dublin_airplane"
+
+# Start state: [x, y, z, qw, qx, qy, qz] in SE3 space
+# Position in meters, orientation in quaternion
+# Starting at origin, 1.5m altitude
+startState: [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0]
+
+# Goal state: [x, y, z, qw, qx, qy, qz] in SE3 space  
+# Make goal closer for simple propagator to find solution
+goalState: [1.0, 0.0, 1.5, -1.0, 0.0, 0.0, 0.0]
+
+# Planning time in seconds - reduce for simple test
+planningTime: 5.0
+
+# Replanning time in seconds (for fusion planner iterations)
+replanningTime: 5.0
+
+# Planner name - use sst for debugging (fusion has issues)
+plannerName: "fusion"
+
+# Visualize the planning tree
+visualize: false
+
+# Optimization model parameters (not used for drone but kept for compatibility)
+learning_rate: 0.005
+num_epochs: 500
+
+# Sampling configuration for optimization
+sampling:
+  # Number of random states to sample for optimization
+  num_states: 3000
+  # Maximum distance for optimization sampling (larger for 3D space)
+  max_distance: 0.05
+  # Standard deviation for position sampling (x, y, z)
+  position_std: 0.01
+  # Standard deviation for rotation sampling (roll, pitch, yaw)
+  rotation_std: 0.1
+
+# Control parameters
+propagation_step_size: 1.0
+min_control_duration: 1
+max_control_duration: 5
+
+# Optimization parameters
+optimizer_learning_rate: 0.01
+optimizer_num_steps: 1000
+
+# Plateau regulator parameters
+plateau_factor: 0.5          # Reduce LR by this factor when plateauing
+plateau_patience: 2          # Wait this many steps before reducing LR
+plateau_min_lr: 1e-6        # Minimum learning rate

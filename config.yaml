@@ -1,40 +1,5 @@
-# Configuration file for fusionPlanning.py
+# Choose the configuration file for the system
 
-# System type (e.g., "pushing")
-system: "pushing"
-
-# Object name to be manipulated
-objectName: "crackerBox"
-
-# Start state as a list [x, y, theta] for SE2 space
-startState: [0.0, -0.7, 0.0]
-
-# Goal state as a list [x, y, theta] for SE2 space  
-goalState: [-0.4, -0.7, 0.0]
-
-# Planning time in seconds
-planningTime: 5.0
-
-# Replanning time in seconds (for future use)
-replanningTime: 4.0
-
-# Planner name (e.g., "fusion", "sst", "rrt")
-plannerName: "fusion"
-
-# Whether to visualize the planning tree
-visualize: false
-
-# Optimization model parameters
-learning_rate: 0.005
-num_epochs: 500
-
-# Sampling configuration for optimization
-sampling:
-  # Number of random states to sample for optimization
-  num_states: 2000
-  # Maximum distance for optimization sampling
-  max_distance: 0.025
-  # Standard deviation for position sampling (x, y)
-  position_std: 0.005
-  # Standard deviation for rotation sampling (yaw)
-  rotation_std: 0.05
+# config_file: "configs/pushing.yaml"
+# config_file: "configs/airplane.yaml"
+config_file: "configs/car.yaml"

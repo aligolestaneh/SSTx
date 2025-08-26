@@ -1,27 +1,10 @@
+import time
+import torch
+import torch.nn.functional as F
+
 import numpy as np
 from math import cos, sin, tan
-
-
-def propagate_simple(start, control, duration, state):
-    """
-    Simple car dynamics model (similar to original OMPL examples)
-
-    Control inputs:
-    - control[0]: velocity command
-    - control[1]: steering angle command
-    """
-    x = start.getX()
-    y = start.getY()
-    yaw = start.getYaw()
-
-    # Simple bicycle model
-    velocity = control[0]
-    steering_angle = control[1]
-
-    # Basic integration
-    state.setX(x + velocity * cos(yaw) * duration)
-    state.setY(y + velocity * sin(yaw) * duration)
-    state.setYaw(yaw + velocity * tan(steering_angle) * duration)
+from scipy.spatial.transform import Rotation as SciRot
 
 
 def propagate_complex(start, control, duration, state):
@@ -70,8 +53,7 @@ def propagate_complex(start, control, duration, state):
 
     # Apply rolling resistance and drag
     resistance_force = (
-        ROLLING_RESISTANCE * current_velocity
-        + DRAG_COEFFICIENT * current_velocity**2
+        ROLLING_RESISTANCE * current_velocity + DRAG_COEFFICIENT * current_velocity**2
     )
     net_acceleration = accel_cmd - resistance_force
 
@@ -114,9 +96,7 @@ def propagate_complex(start, control, duration, state):
         current_vel = np.clip(current_vel, MIN_VELOCITY, MAX_VELOCITY)
 
         # Update angular velocity
-        current_angular_vel = (current_vel / WHEELBASE) * np.tan(
-            steering_angle
-        )
+        current_angular_vel = (current_vel / WHEELBASE) * np.tan(steering_angle)
         current_angular_vel *= low_speed_factor
 
         if current_vel > MAX_VELOCITY * 0.6:
@@ -145,266 +125,212 @@ def propagate_complex(start, control, duration, state):
     state.setYaw(current_yaw)
 
 
-def propagate_unstable(start, control, duration, state):
+def DublinsAirplaneDynamics(state, control, duration):
     """
-    Unstable dynamics model with drift, wind effects, and non-linear instabilities.
-    This model is designed to be challenging and require multiple replanning iterations.
+    Calculate the dynamics for Dublin's airplane model over a given duration.
 
-    Control inputs:
-    - control[0]: thrust in x-direction [-1, 1]
-    - control[1]: thrust in y-direction [-1, 1]
+    Args:
+        state: [x, y, z, psi, gamma, phi] - position and orientation (Euler angles)
+        control: [phi_rate, gamma_rate, v] - control inputs
+        duration: time duration for integration
 
-    Features that make this challenging:
-    - Momentum/inertia effects (velocity doesn't change instantly)
-    - Environmental drift (constant wind/current)
-    - Position-dependent disturbances (turbulence zones)
-    - Velocity-dependent drag
-    - Control delay/lag
-    - Non-linear instabilities at certain regions
+    Returns:
+        final_state: [x, y, z, psi, gamma, phi] after integration
     """
+    print(f"DublinsAirplaneDynamics: state: {state}, control: {control}, duration: {duration}")
 
-    # Extract current state
-    x = start.getX()
-    y = start.getY()
-    yaw = start.getYaw()
-
-    # Control parameters
-    MAX_THRUST = 0.5
-    DRAG_COEFFICIENT = 0.3
-    INERTIA_DAMPING = 0.7  # How quickly velocity responds to control
-
-    # Environmental effects
-    WIND_X = 0.15  # Constant wind/drift in x direction
-    WIND_Y = 0.08  # Constant wind/drift in y direction
-
-    # Estimate current velocity from yaw (simplified momentum model)
-    # In a real system, velocity would be part of state space
-    # For this demo, we derive it from orientation and add complexity
-    base_velocity = 0.3
-    vel_x = (
-        base_velocity * cos(yaw) * 0.7
-    )  # Not exactly aligned with orientation
-    vel_y = base_velocity * sin(yaw) * 0.7
-
-    # Process control inputs with saturation
-    thrust_x = np.clip(control[0], -1.0, 1.0) * MAX_THRUST
-    thrust_y = np.clip(control[1], -1.0, 1.0) * MAX_THRUST
-
-    # Add position-dependent disturbances (turbulence zones)
-    # Create disturbance zones that make certain areas harder to navigate
-    disturbance_x = 0.0
-    disturbance_y = 0.0
-
-    # Turbulence zone 1: Around center-left region
-    if -0.5 < x < 0.0 and -0.2 < y < 0.3:
-        turb_strength = 0.25
-        disturbance_x += turb_strength * sin(x * 20) * cos(y * 15)
-        disturbance_y += turb_strength * cos(x * 15) * sin(y * 20)
-
-    # Turbulence zone 2: Around goal region (makes final approach challenging)
-    goal_x, goal_y = 0.0, 0.5
-    dist_to_goal = np.sqrt((x - goal_x) ** 2 + (y - goal_y) ** 2)
-    if dist_to_goal < 0.2:
-        # Swirling pattern around goal
-        angle_to_goal = np.arctan2(y - goal_y, x - goal_x)
-        swirl_strength = (
-            0.2 * (0.2 - dist_to_goal) / 0.2
-        )  # Stronger closer to goal
-        disturbance_x += swirl_strength * sin(angle_to_goal + np.pi / 2)
-        disturbance_y += swirl_strength * cos(angle_to_goal + np.pi / 2)
-
-    # Add velocity-dependent drag
-    vel_magnitude = np.sqrt(vel_x**2 + vel_y**2)
-    if vel_magnitude > 0:
-        drag_x = -DRAG_COEFFICIENT * vel_x * vel_magnitude
-        drag_y = -DRAG_COEFFICIENT * vel_y * vel_magnitude
+    # Handle both 7-element (quaternion) and 6-element (Euler) state formats
+    if len(state) == 7:
+        # Convert from quaternion to Euler angles
+        x, y, z, qx, qy, qz, qw = state
+        psi, gamma, phi = SciRot.from_quat([qx, qy, qz, qw]).as_euler("zyx", degrees=False)
+    elif len(state) == 6:
+        # Already in Euler format
+        x, y, z, psi, gamma, phi = state
     else:
-        drag_x = drag_y = 0.0
+        raise ValueError(f"Expected state with 6 or 7 elements, got {len(state)}")
 
-    # Add instability based on position (creates drift in certain regions)
-    if x > 0.2:  # Right side is more unstable
-        instability_factor = 0.15
-        disturbance_x += instability_factor * sin(y * 8)
-        disturbance_y += instability_factor * cos(x * 8)
+    phi_rate, gamma_rate, v = control[0], control[1], control[2]
 
-    # Combine all forces
-    total_force_x = thrust_x + WIND_X + disturbance_x + drag_x
-    total_force_y = thrust_y + WIND_Y + disturbance_y + drag_y
+    def f(sv):
+        x, y, z, psi, gamma, phi = sv
+        x_dot = v * np.cos(psi) * np.cos(gamma)
+        y_dot = v * np.sin(psi) * np.cos(gamma)
+        z_dot = v * np.sin(gamma)
+        psi_dot = (9.81 / v) * np.tan(phi) if v > 1e-6 else 0.0
+        gamma_dot = gamma_rate
+        phi_dot = phi_rate
+        return np.array([x_dot, y_dot, z_dot, psi_dot, gamma_dot, phi_dot], dtype=float)
 
-    # Apply inertial effects (velocity doesn't change instantly)
-    # Current velocity influences response to new forces
-    accel_x = total_force_x * INERTIA_DAMPING + vel_x * (1.0 - INERTIA_DAMPING)
-    accel_y = total_force_y * INERTIA_DAMPING + vel_y * (1.0 - INERTIA_DAMPING)
+    # RK4 integration over the duration
+    s = np.array([x, y, z, psi, gamma, phi], dtype=float)
+    total = float(duration)
+    sub_dt = 0.01
+    steps = max(1, int(round(total / sub_dt))) if total > 0 else 1
+    dt = total / steps if steps > 0 else total
 
-    # Update velocity with acceleration
-    new_vel_x = vel_x + accel_x * duration
-    new_vel_y = vel_y + accel_y * duration
+    for _ in range(steps):
+        k1 = f(s)
+        k2 = f(s + 0.5 * dt * k1)
+        k3 = f(s + 0.5 * dt * k2)
+        k4 = f(s + dt * k3)
+        s = s + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        # wrap psi to [-pi, pi]
+        s[3] = (s[3] + np.pi) % (2 * np.pi) - np.pi
 
-    # Limit maximum velocity to prevent numerical issues
-    MAX_VELOCITY = 1.0
-    vel_magnitude = np.sqrt(new_vel_x**2 + new_vel_y**2)
-    if vel_magnitude > MAX_VELOCITY:
-        new_vel_x = new_vel_x / vel_magnitude * MAX_VELOCITY
-        new_vel_y = new_vel_y / vel_magnitude * MAX_VELOCITY
-
-    # Use multiple integration steps for better numerical stability
-    dt = duration / 4.0  # 4 substeps
-    current_x, current_y = x, y
-    current_vel_x, current_vel_y = new_vel_x, new_vel_y
-
-    for step in range(4):
-        # Update position
-        current_x += current_vel_x * dt
-        current_y += current_vel_y * dt
-
-        # Add small random perturbations to make planning more challenging
-        noise_scale = 0.008
-        current_x += noise_scale * (np.random.random() - 0.5) * dt
-        current_y += noise_scale * (np.random.random() - 0.5) * dt
-
-        # Recompute disturbances based on new position
-        step_disturbance_x = 0.0
-        step_disturbance_y = 0.0
-
-        # Turbulence zones (recalculated)
-        if -0.5 < current_x < 0.0 and -0.2 < current_y < 0.3:
-            turb_strength = 0.25
-            step_disturbance_x += (
-                turb_strength * sin(current_x * 20) * cos(current_y * 15)
-            )
-            step_disturbance_y += (
-                turb_strength * cos(current_x * 15) * sin(current_y * 20)
-            )
-
-        # Goal region swirl
-        dist_to_goal = np.sqrt(
-            (current_x - goal_x) ** 2 + (current_y - goal_y) ** 2
-        )
-        if dist_to_goal < 0.2:
-            angle_to_goal = np.arctan2(current_y - goal_y, current_x - goal_x)
-            swirl_strength = 0.2 * (0.2 - dist_to_goal) / 0.2
-            step_disturbance_x += swirl_strength * sin(
-                angle_to_goal + np.pi / 2
-            )
-            step_disturbance_y += swirl_strength * cos(
-                angle_to_goal + np.pi / 2
-            )
-
-        # Apply disturbances to velocity
-        current_vel_x += step_disturbance_x * dt * 0.5
-        current_vel_y += step_disturbance_y * dt * 0.5
-
-    # Calculate orientation based on velocity direction (with some lag)
-    if abs(current_vel_x) > 0.01 or abs(current_vel_y) > 0.01:
-        desired_yaw = np.arctan2(current_vel_y, current_vel_x)
-        # Add some orientation lag - yaw doesn't instantly align with velocity
-        yaw_diff = desired_yaw - yaw
-        # Normalize angle difference
-        while yaw_diff > np.pi:
-            yaw_diff -= 2 * np.pi
-        while yaw_diff < -np.pi:
-            yaw_diff += 2 * np.pi
-
-        # Gradual yaw change
-        yaw_rate = 3.0  # How quickly orientation changes
-        new_yaw = yaw + yaw_diff * yaw_rate * duration
-    else:
-        new_yaw = yaw
-
-    # Normalize yaw to [-π, π]
-    while new_yaw > np.pi:
-        new_yaw -= 2 * np.pi
-    while new_yaw < -np.pi:
-        new_yaw += 2 * np.pi
-
-    # Set final state
-    state.setX(current_x)
-    state.setY(current_y)
-    state.setYaw(new_yaw)
+    return s.tolist()
 
 
-def propagate_pendulum(start, control, duration, state):
-    """
-    Inverted pendulum dynamics - extremely challenging to control.
-    This creates a highly unstable system that requires constant correction.
+def propagateDublinsAirplane(start, control, duration, state):
+    try:
+        # print("Start:")
+        # print(
+        #     f"x: {start.getX()}, y: {start.getY()}, z: {start.getZ()}, quaternion: {start.rotation()}"
+        # )
+        # Extract start SE3 pose
+        x0 = float(start.getX())
+        y0 = float(start.getY())
+        z0 = float(start.getZ())
+        rot = start.rotation()
+        # OMPL stores quaternion as w,x,y,z; scipy expects x,y,z,w
+        q_xyzw = [float(rot.x), float(rot.y), float(rot.z), float(rot.w)]
+        # Get Euler angles: psi (yaw), gamma (pitch), phi (roll)
+        # Use ZYX order: returns [yaw(z), pitch(y), roll(x)]
+        psi0, gamma0, phi0 = SciRot.from_quat(q_xyzw).as_euler("zyx", degrees=False)
 
-    Control inputs:
-    - control[0]: force in x-direction
-    - control[1]: force in y-direction
+        # Read control robustly: [phi_rate, gamma_rate, v]
+        try:
+            phi_rate = float(control[0])
+            gamma_rate = float(control[1])
+            v = float(control[2])
+        except Exception:
+            from ompl import control as oc
 
-    The system behaves like an inverted pendulum trying to balance at each point,
-    making it very difficult to maintain a straight path to the goal.
-    """
+            phi_rate = float(oc.RealVectorControlSpace.getValue(control, 0))
+            gamma_rate = float(oc.RealVectorControlSpace.getValue(control, 1))
+            v = float(oc.RealVectorControlSpace.getValue(control, 2))
 
-    # Extract current state
-    x = start.getX()
-    y = start.getY()
-    yaw = start.getYaw()
+        # State vector s = [x,y,z, psi,yaw, gamma,pitch, phi,roll]
+        s = np.array([x0, y0, z0, psi0, gamma0, phi0], dtype=float)
 
-    # Pendulum parameters
-    PENDULUM_LENGTH = 0.3
-    GRAVITY = 9.81
-    DAMPING = 0.8
-    CONTROL_FORCE_SCALE = 2.0
+        def f(sv):
+            x, y, z, psi, gamma, phi = sv
+            x_dot = v * np.cos(psi) * np.cos(gamma)
+            y_dot = v * np.sin(psi) * np.cos(gamma)
+            z_dot = v * np.sin(gamma)
+            psi_dot = (9.81 / v) * np.tan(phi) if v > 1e-6 else 0.0
+            gamma_dot = gamma_rate
+            phi_dot = phi_rate
+            return np.array([x_dot, y_dot, z_dot, psi_dot, gamma_dot, phi_dot], dtype=float)
 
-    # Process controls
-    force_x = control[0] * CONTROL_FORCE_SCALE
-    force_y = control[1] * CONTROL_FORCE_SCALE
+        # RK4 with substeps
+        total = float(duration)
+        sub_dt = 0.01
+        steps = max(1, int(round(total / sub_dt))) if total > 0 else 1
+        dt = total / steps if steps > 0 else total
+        for _ in range(steps):
+            k1 = f(s)
+            k2 = f(s + 0.5 * dt * k1)
+            k3 = f(s + 0.5 * dt * k2)
+            k4 = f(s + dt * k3)
+            s = s + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+            # wrap psi to [-pi, pi]
+            s[3] = (s[3] + np.pi) % (2 * np.pi) - np.pi
 
-    # Treat yaw as the pendulum angle deviation from vertical
-    # The system tries to fall over, and controls must prevent this
+        # Write back
+        state.setX(float(s[0]))
+        state.setY(float(s[1]))
+        state.setZ(float(s[2]))
+        # Build quaternion from Euler (ZYX -> yaw, pitch, roll)
+        r_new = SciRot.from_euler("zyx", [s[3], s[4], s[5]], degrees=False)
+        q_new_xyzw = r_new.as_quat()  # [x,y,z,w]
+        r_out = state.rotation()
+        r_out.x = float(q_new_xyzw[0])
+        r_out.y = float(q_new_xyzw[1])
+        r_out.z = float(q_new_xyzw[2])
+        r_out.w = float(q_new_xyzw[3])
+        # print("State:")
+        # print(
+        #     f"x: {state.getX()}, y: {state.getY()}, z: {state.getZ()}, quaternion: {state.rotation().x}, {state.rotation().y}, {state.rotation().z}, {state.rotation().w}"
+        # )
+        # input("Press Enter to continue...")
+        return True
+    except Exception as e:
+        print(f"DublinsAirplane propagate error: {e}")
+        return False
 
-    # Pendulum equation: theta_ddot = (g/L) * sin(theta) + disturbances
-    # where theta is the angle from vertical (stored in yaw)
 
-    # Angular acceleration from gravity (destabilizing)
-    gravity_accel = (GRAVITY / PENDULUM_LENGTH) * sin(yaw)
+def carDynamics(start, control, duration):
+    x, y, yaw = start
+    v, w = control
+    d_x = v * cos(yaw) * duration
+    d_y = v * sin(yaw) * duration
+    d_yaw = w * duration
+    return np.array([x + d_x, y + d_y, yaw + d_yaw])
 
-    # Control torque from forces (stabilizing if applied correctly)
-    control_torque_x = force_x / PENDULUM_LENGTH
-    control_torque_y = force_y / PENDULUM_LENGTH
 
-    # Convert to angular acceleration
-    # This is a simplified model - real pendulum would be more complex
-    total_angular_accel = (
-        gravity_accel
-        - control_torque_x * cos(yaw)
-        - control_torque_y * sin(yaw)
-    )
+def carDynamicsTorch(
+    start: torch.Tensor, control: torch.Tensor, *, duration: float
+) -> torch.Tensor:
+    # Ensure we have the right shapes and preserve gradients
+    # start: [batch_size, 3] -> [x, y, yaw]
+    # control: [batch_size, 2] -> [v, w]
 
-    # Add damping
-    # Estimate angular velocity from previous state changes
-    angular_velocity = yaw * 2.0  # Simplified estimate
-    total_angular_accel -= DAMPING * angular_velocity
+    # Debug: Print input tensor properties
+    if start.numel() > 0 and start.numel() <= 10:  # Only debug for small tensors
+        print(f"[DEBUG] carDynamicsTorch inputs:")
+        print(f"  - start shape: {start.shape}, requires_grad: {start.requires_grad}")
+        print(f"  - control shape: {control.shape}, requires_grad: {control.requires_grad}")
+        print(f"  - duration: {duration}")
 
-    # Update angular velocity and position
-    new_angular_vel = angular_velocity + total_angular_accel * duration
-    new_yaw = yaw + new_angular_vel * duration
+    # Extract components using proper indexing to preserve gradients
+    x = start[:, 0]  # [batch_size]
+    y = start[:, 1]  # [batch_size]
+    yaw = start[:, 2]  # [batch_size]
 
-    # The pendulum movement affects x,y position
-    # As it falls in one direction, the base moves in the opposite direction
-    delta_x = -PENDULUM_LENGTH * (sin(new_yaw) - sin(yaw))
-    delta_y = -PENDULUM_LENGTH * (cos(new_yaw) - cos(yaw))
+    v = control[:, 0]  # [batch_size]
+    w = control[:, 1]  # [batch_size]
 
-    # Add direct control forces for translation
-    translation_x = force_x * duration * 0.3
-    translation_y = force_y * duration * 0.3
+    # Debug: Check extracted components
+    if start.numel() > 0 and start.numel() <= 10:
+        print(f"  - x requires_grad: {x.requires_grad}, shape: {x.shape}")
+        print(f"  - v requires_grad: {v.requires_grad}, shape: {v.shape}")
 
-    # Add environmental disturbances
-    disturbance_x = 0.02 * sin(x * 10 + y * 7) * duration
-    disturbance_y = 0.02 * cos(x * 7 + y * 10) * duration
+    # Compute state changes (all operations preserve gradients)
+    d_x = v * torch.cos(yaw) * duration
+    d_y = v * torch.sin(yaw) * duration
+    d_yaw = w * duration
 
-    # Combine all effects
-    new_x = x + delta_x + translation_x + disturbance_x
-    new_y = y + delta_y + translation_y + disturbance_y
+    # Debug: Check computed changes
+    if start.numel() > 0 and start.numel() <= 10:
+        print(f"  - d_x requires_grad: {d_x.requires_grad}, shape: {d_x.shape}")
 
-    # Normalize yaw
-    while new_yaw > np.pi:
-        new_yaw -= 2 * np.pi
-    while new_yaw < -np.pi:
-        new_yaw += 2 * np.pi
+    # Compute new states
+    new_x = x + d_x
+    new_y = y + d_y
+    new_yaw = yaw + d_yaw
 
-    # Set final state
-    state.setX(new_x)
-    state.setY(new_y)
-    state.setYaw(new_yaw)
+    # Debug: Check new states
+    if start.numel() > 0 and start.numel() <= 10:
+        print(f"  - new_x requires_grad: {new_x.requires_grad}, shape: {new_x.shape}")
+
+    # Stack results to create [batch_size, 3] output
+    # This preserves the computational graph and gradients
+    result = torch.stack([new_x, new_y, new_yaw], dim=1)
+
+    # Debug: Check final result
+    if start.numel() > 0 and start.numel() <= 10:
+        print(f"  - result requires_grad: {result.requires_grad}, shape: {result.shape}")
+        print(f"  - result grad_fn: {result.grad_fn}")
+
+    return result
+
+
+def propagateCar(start, control, duration, state):
+    start = np.array([start.getX(), start.getY(), start.getYaw()])
+    control = np.array([control[0], control[1]])
+    result = carDynamics(start, control, duration)
+    time.sleep(0.0002)
+    state.setX(result[0])
+    state.setY(result[1])
+    state.setYaw(result[2])

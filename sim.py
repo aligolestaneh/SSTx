@@ -56,12 +56,8 @@ class Sim:
         gs.init(backend=gs.gpu)
         # Create the Scene
         self.scene = gs.Scene(
-            viewer_options=gs.options.ViewerOptions(
-                res=(960, 640), max_FPS=60
-            ),
-            sim_options=gs.options.SimOptions(
-                dt=self.dt, substeps=self.substeps
-            ),
+            viewer_options=gs.options.ViewerOptions(res=(960, 640), max_FPS=60),
+            sim_options=gs.options.SimOptions(dt=self.dt, substeps=self.substeps),
             rigid_options=gs.options.RigidOptions(
                 box_box_detection=True,
             ),
@@ -78,13 +74,9 @@ class Sim:
         # Add Lab scene
         if "lab_scene" in self.env_name:
             table_height = 0.71 + 1e-3  # a bit higher than the actual table
-            file_path = (
-                "assets/" + self.env_name + "/" + self.env_name + ".urdf"
-            )
+            file_path = "assets/" + self.env_name + "/" + self.env_name + ".urdf"
             self.env = self.scene.add_entity(
-                gs.morphs.URDF(
-                    file=file_path, fixed=True, convexify=self.convexify
-                )
+                gs.morphs.URDF(file=file_path, fixed=True, convexify=self.convexify)
             )
             self.env.set_friction(default_friction)
         else:
@@ -130,9 +122,7 @@ class Sim:
             x, y, theta = object_info[1]
 
             file_path = f"assets/{object_type}/{object_type}.urdf"
-            obj = self.scene.add_entity(
-                gs.morphs.URDF(file=file_path, convexify=self.convexify)
-            )
+            obj = self.scene.add_entity(gs.morphs.URDF(file=file_path, convexify=self.convexify))
             obj.set_friction(default_friction)
             self.objs.append(obj)
 
@@ -144,18 +134,10 @@ class Sim:
 
         # The following needs to be done after the scene gets built
         # Set Kp and Kd for the Robot control
-        self.robot.set_dofs_kp(
-            np.full(len(self.robot_dofs_idx), 5000), self.robot_dofs_idx
-        )
-        self.robot.set_dofs_kv(
-            np.full(len(self.robot_dofs_idx), 500), self.robot_dofs_idx
-        )
-        self.robot.set_dofs_kp(
-            np.full(len(self.ee_dofs_idx), 1000), self.ee_dofs_idx
-        )
-        self.robot.set_dofs_kv(
-            np.full(len(self.ee_dofs_idx), 100), self.ee_dofs_idx
-        )
+        self.robot.set_dofs_kp(np.full(len(self.robot_dofs_idx), 5000), self.robot_dofs_idx)
+        self.robot.set_dofs_kv(np.full(len(self.robot_dofs_idx), 500), self.robot_dofs_idx)
+        self.robot.set_dofs_kp(np.full(len(self.ee_dofs_idx), 1000), self.ee_dofs_idx)
+        self.robot.set_dofs_kv(np.full(len(self.ee_dofs_idx), 100), self.ee_dofs_idx)
 
         # Get object shape and then set object to given pose
         for i, obj in enumerate(self.objs):
@@ -166,8 +148,7 @@ class Sim:
 
             # update the object initial pose to be on the table
             obj_init_pose = Pose(
-                objs_init_pose[i].position
-                + np.array([0, 0, obj_shape[2] / 2]),
+                objs_init_pose[i].position + np.array([0, 0, obj_shape[2] / 2]),
                 objs_init_pose[i].rotation,
             )
             obj_init_poses = [obj_init_pose.copy() for _ in range(self.n_envs)]
@@ -203,12 +184,8 @@ class Sim:
 
         # Reset the objects to the initial state
         for i, obj in enumerate(self.objs):
-            positions = np.array(
-                [pose.position for pose in self.objs_init_poses[i]]
-            )
-            rotations = np.array(
-                [pose.rotation for pose in self.objs_init_poses[i]]
-            )
+            positions = np.array([pose.position for pose in self.objs_init_poses[i]])
+            rotations = np.array([pose.rotation for pose in self.objs_init_poses[i]])
             obj.set_pos(positions)
             obj.set_quat(rotations)
 
@@ -241,28 +218,20 @@ class Sim:
     def close_gripper(self, envs_idx=None):
         """Close the gripper"""
         if envs_idx is None:
-            gripper_val = np.tile(
-                self.ee_close_val, (self.n_envs, len(self.ee_dofs_idx))
-            )
+            gripper_val = np.tile(self.ee_close_val, (self.n_envs, len(self.ee_dofs_idx)))
         else:
             gripper_val = np.tile(self.ee_close_val, (len(self.ee_dofs_idx)))
         # Control the gripper
-        self.robot.control_dofs_position(
-            gripper_val, self.ee_dofs_idx, envs_idx
-        )
+        self.robot.control_dofs_position(gripper_val, self.ee_dofs_idx, envs_idx)
 
     def open_gripper(self, env_idx=None):
         """Open the gripper"""
         if env_idx is None:
-            gripper_val = np.tile(
-                self.ee_open_val, (self.n_envs, len(self.ee_dofs_idx))
-            )
+            gripper_val = np.tile(self.ee_open_val, (self.n_envs, len(self.ee_dofs_idx)))
         else:
             gripper_val = np.tile(self.ee_open_val, (len(self.ee_dofs_idx)))
         # Control the gripper
-        self.robot.control_dofs_position(
-            gripper_val, self.ee_dofs_idx, env_idx
-        )
+        self.robot.control_dofs_position(gripper_val, self.ee_dofs_idx, env_idx)
 
     def execute_waypoints(self, waypoints):
         """Run the push simulation with the given waypoints"""
@@ -278,9 +247,7 @@ class Sim:
         for obj in self.objs:
             obj_pos = obj.get_pos().cpu().numpy()
             obj_quat = obj.get_quat().cpu().numpy()
-            obj_prev_poses = [
-                Pose(pos, quat) for pos, quat in zip(obj_pos, obj_quat)
-            ]
+            obj_prev_poses = [Pose(pos, quat) for pos, quat in zip(obj_pos, obj_quat)]
             all_obj_prev_poses.append(obj_prev_poses)
 
         data_y = np.zeros((len(self.objs), n_trials, 3))
@@ -299,9 +266,7 @@ class Sim:
 
         # Fill the waypoints with the robot_init to match the size
         if n_trials < self.n_envs:
-            complete_waypoints = np.tile(
-                self.robot_init, (n_run_steps, self.n_envs, 1)
-            )
+            complete_waypoints = np.tile(self.robot_init, (n_run_steps, self.n_envs, 1))
             complete_waypoints[:, :n_trials, :] = waypoints
             waypoints = complete_waypoints
 
@@ -322,12 +287,8 @@ class Sim:
         for i, obj in enumerate(self.objs):
             obj_pos = obj.get_pos().cpu().numpy()
             obj_quat = obj.get_quat().cpu().numpy()
-            curr_poses = [
-                Pose(pos, rot) for pos, rot in zip(obj_pos, obj_quat)
-            ]
-            obj_poses = self.get_relative_poses(
-                curr_poses, all_obj_prev_poses[i]
-            )
+            curr_poses = [Pose(pos, rot) for pos, rot in zip(obj_pos, obj_quat)]
+            obj_poses = self.get_relative_poses(curr_poses, all_obj_prev_poses[i])
             data_y[i, :, :] = obj_poses[:n_trials, :]
 
         return data_y
@@ -336,8 +297,7 @@ class Sim:
         """Get the relative SE2 poses of the object"""
         # Compute relative pose
         local_poses = [
-            init_pose.invert @ curr_pose
-            for curr_pose, init_pose in zip(current_poses, init_poses)
+            init_pose.invert @ curr_pose for curr_pose, init_pose in zip(current_poses, init_poses)
         ]
         # Convert to SE2
         local_pos = np.array([pose.position[:2] for pose in local_poses])
@@ -365,9 +325,7 @@ class Sim:
         obj_poses = [Pose(pos, quat) for pos, quat in zip(obj_pos, obj_quat)]
 
         # Get the obj poses w.r.t. the robot base
-        obj_rob_poses = [
-            robot_poses[i].invert @ obj_poses[i] for i in range(self.n_envs)
-        ]
+        obj_rob_poses = [robot_poses[i].invert @ obj_poses[i] for i in range(self.n_envs)]
         obj_rob_pos = np.array([pose.position for pose in obj_rob_poses])
         obj_rob_quat = np.array([pose.rotation for pose in obj_rob_poses])
 
@@ -403,25 +361,15 @@ class Sim:
             self.sim_angles = self.sim_angles + np.array(by_angles)
 
         # New rotation for the scene
-        new_rots = np.array(
-            [
-                Pose(rotation=(0, 0, angle)).rotation
-                for angle in self.sim_angles
-            ]
-        )
+        new_rots = np.array([Pose(rotation=(0, 0, angle)).rotation for angle in self.sim_angles])
 
         # Store previous table pose
         prev_table_pos = self.env.get_pos().cpu().numpy()
         prev_table_quat = self.env.get_quat().cpu().numpy()
-        prev_table_poses = [
-            Pose(pos, quat)
-            for pos, quat in zip(prev_table_pos, prev_table_quat)
-        ]
+        prev_table_poses = [Pose(pos, quat) for pos, quat in zip(prev_table_pos, prev_table_quat)]
         # Set the new table pose
         self.env.set_quat(new_rots)
-        new_table_poses = [
-            Pose(prev_table_pos[i], new_rots[i]) for i in range(self.n_envs)
-        ]
+        new_table_poses = [Pose(prev_table_pos[i], new_rots[i]) for i in range(self.n_envs)]
 
         # Set the new robot base pose
         self.robot.set_quat(new_rots)
@@ -434,13 +382,9 @@ class Sim:
             obj_poses = [Pose(pos, ori) for pos, ori in zip(obj_pos, obj_ori)]
 
             obj_local_poses = [
-                prev_table_poses[i].invert @ obj_poses[i]
-                for i in range(self.n_envs)
+                prev_table_poses[i].invert @ obj_poses[i] for i in range(self.n_envs)
             ]
-            obj_new_poses = [
-                new_table_poses[i] @ obj_local_poses[i]
-                for i in range(self.n_envs)
-            ]
+            obj_new_poses = [new_table_poses[i] @ obj_local_poses[i] for i in range(self.n_envs)]
             obj.set_pos(np.array([pose.position for pose in obj_new_poses]))
             obj.set_quat(np.array([pose.rotation for pose in obj_new_poses]))
 
@@ -492,17 +436,13 @@ class Sim:
                     for pair in collision_pairs
                     if pair[0] != self.env.idx and pair[1] != self.env.idx
                 ]
-                valid = len(
-                    collision_pairs
-                ) == 0 and spaceInformation.satisfiesBounds(state)
+                valid = len(collision_pairs) == 0 and spaceInformation.satisfiesBounds(state)
                 # print(f"[INFO] Valid: {valid}")
                 return valid
             else:
                 return spaceInformation.satisfiesBounds(state)
 
-        ss.setStateValidityChecker(
-            ob.StateValidityCheckerFn(partial(isStateValid, si))
-        )
+        ss.setStateValidityChecker(ob.StateValidityCheckerFn(partial(isStateValid, si)))
         ss.setStatePropagator(oc.StatePropagatorFn(propagator.propagate))
 
         start_state = ob.State(space)
@@ -548,9 +488,7 @@ class Sim:
             durations = []
             for i in range(path.getControlCount()):
                 control = path.getControl(i)
-                controls.append(
-                    [int(control[0]) * np.pi / 2, control[1], control[2]]
-                )
+                controls.append([int(control[0]) * np.pi / 2, control[1], control[2]])
                 durations.append(path.getControlDuration(i))
 
             return states, controls, durations
@@ -575,15 +513,11 @@ class Sim:
             collision_pairs = self.robot.detect_collision()
             return len(collision_pairs) == 0
 
-        ss.setStateValidityChecker(
-            ob.StateValidityCheckerFn(partial(is_state_valid))
-        )
+        ss.setStateValidityChecker(ob.StateValidityCheckerFn(partial(is_state_valid)))
         ss.setPlanner(getattr(og, planner)(ss.getSpaceInformation()))
         start_state = ob.State(space)
         for i in range(6):
-            start_state[i] = float(
-                self.robot.get_dofs_position()[0, i].cpu().numpy()
-            )
+            start_state[i] = float(self.robot.get_dofs_position()[0, i].cpu().numpy())
 
         ss.setStartState(start_state)
         obj_pos, obj_quat, _, _, obj_shape = self.get_obj_info(obj_idx)
@@ -650,9 +584,7 @@ class Sim:
                 dir_vector = np.array([np.cos(rotation), np.sin(rotation)])
                 side_offset_vector = np.array([-dir_vector[1], dir_vector[0]])
 
-                start = (dir_vector * (to_edge + pre_push_offset)) + (
-                    offset * side_offset_vector
-                )
+                start = (dir_vector * (to_edge + pre_push_offset)) + (offset * side_offset_vector)
 
                 local_pos = [start[0], start[1], 0]
 
@@ -720,8 +652,8 @@ if __name__ == "__main__":
     sim = Sim(
         "lab_scene_bin",
         "ur10_robotis_d435_pri",
-        [("wood_block_flipped", (0.75, -0.7, 0))],
-        n_envs=100,
+        [("cracker_box", (0.75, -0.7, 0))],
+        n_envs=1,
         dt=0.01,
         substeps=3,
         convexify=True,
@@ -729,5 +661,9 @@ if __name__ == "__main__":
 
     input()
     sim.close_gripper([0])
+
+    sim.robot.set_qpos(np.array([1.3, -1.571, 1.2, -1.2, -1.571, -0.271]), sim.robot_dofs_idx)
+    sim.scene.step()
+    input()
     for _ in range(1000):
         sim.scene.step()

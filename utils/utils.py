@@ -15,9 +15,7 @@ except ImportError:
     from os.path import abspath, dirname, join
     import sys
 
-    sys.path.insert(
-        0, join(dirname(dirname(abspath(__file__))), "py-bindings")
-    )
+    sys.path.insert(0, join(dirname(dirname(abspath(__file__))), "py-bindings"))
     from ompl import base as ob
     from ompl import control as oc
 
@@ -46,9 +44,7 @@ def parse_command_line_args():
                 try:
                     args[key] = float(value)
                 except ValueError:
-                    print(
-                        f"Warning: Invalid float value for {key}: {value}. Using default."
-                    )
+                    print(f"Warning: Invalid float value for {key}: {value}. Using default.")
                     args[key] = defaults[key]
             else:
                 args[key] = value
@@ -310,9 +306,7 @@ def plot_states(states, planned_states=None, obj_shape=None):
         if planned_states is not None:
             for state in planned_states:
                 state_x, state_y, state_theta = state
-                draw_rectangle(
-                    state_x, state_y, w, l, state_theta, "b", alpha=0.3
-                )
+                draw_rectangle(state_x, state_y, w, l, state_theta, "b", alpha=0.3)
         for state in states:
             state_x, state_y, state_theta = state
             draw_rectangle(state_x, state_y, w, l, state_theta, "g", alpha=0.3)
@@ -329,9 +323,7 @@ def plot_states(states, planned_states=None, obj_shape=None):
     plt.show()
 
 
-def draw_rectangle(
-    x, y, width, length, theta, color="b", alpha=0.5, label=None
-):
+def draw_rectangle(x, y, width, length, theta, color="b", alpha=0.5, label=None):
     """Draw a rectangle at the given position with the given orientation."""
     # Calculate the four corners of the rectangle
     corners = np.array(
@@ -345,9 +337,7 @@ def draw_rectangle(
     )
 
     # Rotate the corners
-    rot_matrix = np.array(
-        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-    )
+    rot_matrix = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
     rotated_corners = np.dot(corners, rot_matrix.T)
     # Translate the corners
     translated_corners = rotated_corners + np.array([x, y])
@@ -371,28 +361,49 @@ def draw_rectangle(
         plt.text(x, y, label, ha="center", va="center", color="black")
 
 
+def isStateValid(spaceInformation, state):
+    """Check if state is valid (within bounds and collision-free)."""
+    return spaceInformation.satisfiesBounds(state)
+
+
 def state2list(state, state_type: str) -> list:
 
-    if state_type.upper() == "SE2":
+    if state_type == "simple_car":
         # SE2 state: x, y, theta
         return [state.getX(), state.getY(), state.getYaw()]
 
-    elif state_type.upper() == "SE3":
+    elif state_type == "dublin_airplane":
         # SE3 state: x, y, z, qw, qx, qy, qz (position + quaternion)
-        return [
-            state.getX(),
-            state.getY(),
-            state.getZ(),
-            state.getRotation().w,
-            state.getRotation().x,
-            state.getRotation().y,
-            state.getRotation().z,
-        ]
+        # For OMPL SE3 states, access the SO3 part using the rotation method
+        try:
+            # Try the standard OMPL SE3 state access
+            return [
+                state.getX(),
+                state.getY(),
+                state.getZ(),
+                state.rotation().w,  # quaternion w component
+                state.rotation().x,  # quaternion x component
+                state.rotation().y,  # quaternion y component
+                state.rotation().z,  # quaternion z component
+            ]
+        except AttributeError:
+            # Fallback: try to access as compound state
+            try:
+                return [
+                    state.getX(),
+                    state.getY(),
+                    state.getZ(),
+                    state.rotation.w,  # quaternion w component
+                    state.rotation.x,  # quaternion x component
+                    state.rotation.y,  # quaternion y component
+                    state.rotation.z,  # quaternion z component
+                ]
+            except AttributeError:
+                print(f"Warning: Could not access SE3 state components for type {type(state)}")
+                return []
 
     else:
-        print(
-            f"Warning: Unknown state type '{state_type}'. Returning empty list."
-        )
+        print(f"Warning: Unknown state type '{state_type}'. Returning empty list.")
         return []
 
 
@@ -404,30 +415,129 @@ def isSE2Equal(state1, state2, tolerance=1e-6):
     return diff_x < tolerance and diff_y < tolerance and diff_yaw < tolerance
 
 
+def isSE3Equal(state1, state2, tolerance=1e-6):
+    """Compare two SE3 states for equality within tolerance."""
+    if len(state1) < 7 or len(state2) < 7:
+        return False
+
+    # Compare position components
+    pos_diff = np.sqrt(
+        (state1[0] - state2[0]) ** 2 + (state1[1] - state2[1]) ** 2 + (state1[2] - state2[2]) ** 2
+    )
+
+    # Compare quaternion components (normalize first to handle sign ambiguity)
+    quat1_norm = normalize_quaternion([state1[3], state1[4], state1[5], state1[6]])
+    quat2_norm = normalize_quaternion([state2[3], state2[4], state2[5], state2[6]])
+
+    quat_diff = np.sqrt(
+        (quat1_norm[0] - quat2_norm[0]) ** 2
+        + (quat1_norm[1] - quat2_norm[1]) ** 2
+        + (quat1_norm[2] - quat2_norm[2]) ** 2
+        + (quat1_norm[3] - quat2_norm[3]) ** 2
+    )
+
+    return pos_diff < tolerance and quat_diff < tolerance
+
+
+def isStateEqual(state1, state2, system, tolerance=1e-6):
+    """Generic state comparison function that handles different systems."""
+    if system == "simple_car":
+        return isSE2Equal(state1, state2, tolerance)
+    elif system == "dublin_airplane":
+        return isSE3Equal(state1, state2, tolerance)
+    else:
+        # Fallback to simple element-wise comparison
+        if len(state1) != len(state2):
+            return False
+        return all(abs(a - b) < tolerance for a, b in zip(state1, state2))
+
+
+def normalize_quaternion(quat):
+    """Normalize quaternion to handle sign ambiguity."""
+    quat = np.array(quat)
+    # Normalize to unit length
+    norm = np.linalg.norm(quat)
+    if norm > 0:
+        quat = quat / norm
+    # Ensure consistent sign (make first non-zero component positive)
+    for i in range(4):
+        if abs(quat[i]) > 1e-10:
+            if quat[i] < 0:
+                quat = -quat
+            break
+    return quat
+
+
 def arrayDistance(array1, array2, system: str):
-    # Convert SE2Pose objects to arrays if needed
-    if hasattr(array1, "flat"):  # SE2Pose object
+    from ompl import base as ob
+
+    if hasattr(array1, "flat"):
         array1 = array1.flat
-    if hasattr(array2, "flat"):  # SE2Pose object
+    if hasattr(array2, "flat"):
         array2 = array2.flat
 
-    if system == "SE2":
-        # Calculate position distance
+    if system == "dublin_airplane":
+        # Check if arrays have enough elements for SE3
+        if len(array1) < 7 or len(array2) < 7:
+            raise ValueError(
+                f"SE3 states need at least 7 elements, got {len(array1)} and {len(array2)}"
+            )
+
         pos_distance = np.sqrt(
-            (array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2
+            (array1[0] - array2[0]) ** 2
+            + (array1[1] - array2[1]) ** 2
+            + (array1[2] - array2[2]) ** 2
         )
 
-        # Calculate angular distance with proper wrapping
-        # Compute the shortest angular difference using the standard formula
-        yaw_diff = abs((array1[2] - array2[2] + np.pi) % (2 * np.pi) - np.pi)
+        # Input format is [qx, qy, qz, qw] at indices [3, 4, 5, 6]
+        # Convert to [w, x, y, z] for OMPL
+        quat1_norm = normalize_quaternion(
+            [array1[6], array1[3], array1[4], array1[5]]
+        )  # [w, x, y, z]
+        quat2_norm = normalize_quaternion(
+            [array2[6], array2[3], array2[4], array2[5]]
+        )  # [w, x, y, z]
 
-        # Combine position and angular distances
-        # Using a weighted combination similar to OMPL's SE2StateSpace
-        return np.sqrt(pos_distance**2 + 0.5 * yaw_diff**2)
-    elif system == "SE2Position":
-        return np.sqrt(
-            (array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2
-        )
+        # Create SO3 states and set quaternions
+        so3_space = ob.SO3StateSpace()
+        quat1 = so3_space.allocState()
+        quat2 = so3_space.allocState()
+
+        # quat1_norm is [w, x, y, z], map to OMPL SO3State
+        quat1.w = quat1_norm[0]  # w component
+        quat1.x = quat1_norm[1]  # x component
+        quat1.y = quat1_norm[2]  # y component
+        quat1.z = quat1_norm[3]  # z component
+
+        quat2.w = quat2_norm[0]  # w component
+        quat2.x = quat2_norm[1]  # x component
+        quat2.y = quat2_norm[2]  # y component
+        quat2.z = quat2_norm[3]  # z component
+
+        rot_distance = 2.0 * so3_space.distance(quat1, quat2)
+        return np.sqrt(pos_distance**2 + 0.5 * rot_distance**2)
+
+    elif system == "simple_car" or system == "pushing":
+        # Check if arrays have enough elements for SE2
+        if len(array1) < 3 or len(array2) < 3:
+            raise ValueError(
+                f"SE2 states need at least 3 elements, got {len(array1)} and {len(array2)}"
+            )
+
+        posDistance = np.sqrt((array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2)
+        yawDistance = abs((array1[2] - array2[2] + np.pi) % (2 * np.pi) - np.pi)
+        return np.sqrt(posDistance**2 + 0.5 * yawDistance**2)
+
+    elif system == "position":
+        # Check if arrays have enough elements for SE2Position
+        if len(array1) < 2 or len(array2) < 2:
+            raise ValueError(
+                f"SE2Position states need at least 2 elements, got {len(array1)} and {len(array2)}"
+            )
+
+        posDistance = np.sqrt((array1[0] - array2[0]) ** 2 + (array1[1] - array2[1]) ** 2)
+        return posDistance
+
     else:
         raise ValueError(f"Invalid system: {system}")
 
@@ -447,3 +557,46 @@ def log(message, log_type="info"):
         print(message)
     else:
         print(f"{color_code}{message}{reset}")
+
+
+def printState(state, system, situation):
+    """Print the state in a readable format."""
+    if system == "simple_car" or system == "pushing":
+        print(
+            f"       - {situation} State: x={state[0]:.3f}, y={state[1]:.3f}, theta={state[2]:.3f}"
+        )
+
+    elif system == "dublin_airplane":
+        if len(state) == 7:
+            print(
+                f"       - {situation} State: x={state[0]:.3f}, y={state[1]:.3f}, z={state[2]:.3f}, "
+                f"quat=[{state[3]:.3f}, {state[4]:.3f}, {state[5]:.3f}, {state[6]:.3f}]"
+            )
+        else:
+            print(
+                f"       - {situation} State: x={state[0]:.3f}, y={state[1]:.3f}, z={state[2]:.3f}, "
+                f"psi={state[3]:.3f}, gamma={state[4]:.3f}, phi={state[5]:.3f}"
+            )
+
+    elif system == "control":
+        print(f"       - {situation} Control: {state}")
+
+    else:
+        print(f"       - {situation} State: {state}")
+
+
+def addNoise(system, state, pos_std, rot_std):
+    if system == "simple_car":
+        state[0] = state[0] + np.clip(np.random.normal(0, pos_std), -pos_std, pos_std)
+        state[1] = state[1] + np.clip(np.random.normal(0, pos_std), -pos_std, pos_std)
+        state[2] = state[2] + np.clip(np.random.normal(0, rot_std), -rot_std, rot_std)
+
+    elif system == "dublin_airplane":
+        state[0] = state[0] + np.clip(np.random.normal(0, pos_std), -pos_std, pos_std)
+        state[1] = state[1] + np.clip(np.random.normal(0, pos_std), -pos_std, pos_std)
+        state[2] = state[2] + np.clip(np.random.normal(0, pos_std), -pos_std, pos_std)
+        state[3] = state[3] + np.clip(np.random.normal(0, rot_std), -rot_std, rot_std)
+        state[4] = state[4] + np.clip(np.random.normal(0, rot_std), -rot_std, rot_std)
+        state[5] = state[5] + np.clip(np.random.normal(0, rot_std), -rot_std, rot_std)
+
+    return state

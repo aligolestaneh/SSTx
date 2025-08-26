@@ -11,7 +11,6 @@ from planning.planning_utils import (
     BoxPropagator,
     ControlSampler,
     ActiveControlSampler,
-    isStateValid,
     get_combined_objective,
 )
 
@@ -91,13 +90,9 @@ def plan_to_edge(
     else:
         # Active control sampler
         def ControlSamplerAllocator(space):
-            return ActiveControlSampler(
-                space, model, x_train, obj_shape, control_list
-            )
+            return ActiveControlSampler(space, model, x_train, obj_shape, control_list)
 
-    cspace.setControlSamplerAllocator(
-        oc.ControlSamplerAllocator(ControlSamplerAllocator)
-    )
+    cspace.setControlSamplerAllocator(oc.ControlSamplerAllocator(ControlSamplerAllocator))
 
     # Set the start and goal
     start_state = ob.State(space)
@@ -106,9 +101,7 @@ def plan_to_edge(
     start_state().setYaw(start[2])
     ss.setStartState(start_state)
 
-    goal_state = GraspableRegion(
-        ss.getSpaceInformation(), goal, obj_shape, 0.76
-    )
+    goal_state = GraspableRegion(ss.getSpaceInformation(), goal, obj_shape, 0.76)
     goal_state.setThreshold(0.01)
     ss.setGoal(goal_state)
 
@@ -188,9 +181,7 @@ def main(
 
     # Split the problems
     itr = int(iteration) - 1
-    initial_states = initial_states[
-        itr * num_planning : (itr + 1) * num_planning
-    ]
+    initial_states = initial_states[itr * num_planning : (itr + 1) * num_planning]
 
     # Define the start and goal
     controls_list = []  # [n, steps]

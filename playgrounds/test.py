@@ -10,19 +10,15 @@ except ImportError:
     from os.path import abspath, dirname, join
     import sys
 
-    sys.path.insert(
-        0, join(dirname(dirname(abspath(__file__))), "py-bindings")
-    )
+    sys.path.insert(0, join(dirname(dirname(abspath(__file__))), "py-bindings"))
     from ompl import base as ob
     from ompl import control as oc
 
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-)
-from fusionPlanning import (
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from pushingPlanning import (
     getSolutionsInfo,
     getAllPlannerSolutionsInfo,
     printAllPlannerSolutions,
@@ -74,9 +70,7 @@ def printBestSolution(best_solution, iteration_label=""):
 
     print(f"\n  📍 States:")
     for i, state in enumerate(best_solution["states"]):
-        print(
-            f"    [{i}]: x={state[0]:.5f}, y={state[1]:.5f}, yaw={state[2]:.5f}"
-        )
+        print(f"    [{i}]: x={state[0]:.5f}, y={state[1]:.5f}, yaw={state[2]:.5f}")
 
     print(f"\n  🎮 Controls:")
     if "controls" in best_solution and len(best_solution["controls"]) > 0:
@@ -133,9 +127,7 @@ def plan():
     # define a simple setup class
     ss = oc.SimpleSetup(cspace)
     ss.setStateValidityChecker(
-        ob.StateValidityCheckerFn(
-            partial(isStateValid, ss.getSpaceInformation())
-        )
+        ob.StateValidityCheckerFn(partial(isStateValid, ss.getSpaceInformation()))
     )
     ss.setStatePropagator(oc.StatePropagatorFn(propagate))
     # Set min and max control duration to 1
@@ -182,9 +174,7 @@ def plan():
         # Use the new solution tracking feature
         planner = ss.getPlanner()
         if hasattr(planner, "getAllSolutions"):
-            printAllPlannerSolutions(
-                planner, "All Solutions Found During Initial Planning"
-            )
+            printAllPlannerSolutions(planner, "All Solutions Found During Initial Planning")
 
         # Get the best solution using the new tracking feature
         best_solution, all_infos = getBestSolutionFromPlanner(ss)
@@ -202,9 +192,7 @@ def plan():
         # Test with the first state of the best solution
         if best_solution and len(best_solution["states"]) > 0:
             first_state = best_solution["states"][0]
-            print(
-                f"\n🔍 Testing getChildrenStates for first state: {first_state}"
-            )
+            print(f"\n🔍 Testing getChildrenStates for first state: {first_state}")
 
             children = getChildrenStates(ss, first_state)
             print(f"✅ Found {len(children)} children states:")
@@ -214,9 +202,7 @@ def plan():
             # Test with the second state if it exists
             if len(best_solution["states"]) > 1:
                 second_state = best_solution["states"][1]
-                print(
-                    f"\n🔍 Testing getChildrenStates for second state: {second_state}"
-                )
+                print(f"\n🔍 Testing getChildrenStates for second state: {second_state}")
 
                 children2 = getChildrenStates(ss, second_state)
                 print(f"✅ Found {len(children2)} children states:")
@@ -225,13 +211,9 @@ def plan():
 
             # Test with a state that should not exist
             fake_state = [999.0, 999.0, 999.0]
-            print(
-                f"\n🔍 Testing getChildrenStates for fake state: {fake_state}"
-            )
+            print(f"\n🔍 Testing getChildrenStates for fake state: {fake_state}")
             children_fake = getChildrenStates(ss, fake_state)
-            print(
-                f"✅ Found {len(children_fake)} children states (should be 0):"
-            )
+            print(f"✅ Found {len(children_fake)} children states (should be 0):")
             for i, child in enumerate(children_fake):
                 print(f"  Child {i}: {child}")
 
@@ -242,9 +224,7 @@ def plan():
             # Continue replanning while there are more than 1 control
             replan_count = 0
             print("\n" + "=" * 80)
-            print(
-                "🔄 STARTING CONTINUOUS REPLAN TESTING WITH NEW SOLUTION TRACKING"
-            )
+            print("🔄 STARTING CONTINUOUS REPLAN TESTING WITH NEW SOLUTION TRACKING")
             print("=" * 80)
 
             # Get initial solution info using the new tracking feature
@@ -257,10 +237,7 @@ def plan():
                 f"  Initial solution has {current_solution_info.get('control_count', 0)} controls, cost: {current_solution_info.get('cost', 0):.4f}"
             )
 
-            while (
-                current_solution_info
-                and current_solution_info.get("control_count", 0) > 1
-            ):
+            while current_solution_info and current_solution_info.get("control_count", 0) > 1:
                 replan_count += 1
                 print(
                     f"\n  🔄 Replan {replan_count}: {current_solution_info.get('control_count', 0)} controls remaining"
@@ -269,9 +246,7 @@ def plan():
                 # Get solutions BEFORE replanning using new tracking
                 best_before, all_before = getBestSolutionFromPlanner(ss)
                 if best_before:
-                    printBestSolution(
-                        best_before, f"BEFORE REPLAN {replan_count}"
-                    )
+                    printBestSolution(best_before, f"BEFORE REPLAN {replan_count}")
 
                     # Show all solutions tracked by planner
                     if hasattr(planner, "getAllSolutions"):
@@ -296,24 +271,15 @@ def plan():
                             )
 
                         print(f"   🎮 Controls:")
-                        if (
-                            "controls" in solution_info
-                            and len(solution_info["controls"]) > 0
-                        ):
-                            for i, control in enumerate(
-                                solution_info["controls"]
-                            ):
-                                print(
-                                    f"     [{i}]: [{', '.join(f'{c:.5f}' for c in control)}]"
-                                )
+                        if "controls" in solution_info and len(solution_info["controls"]) > 0:
+                            for i, control in enumerate(solution_info["controls"]):
+                                print(f"     [{i}]: [{', '.join(f'{c:.5f}' for c in control)}]")
                         else:
                             print("     (No controls)")
                     print("=" * 70)
 
                 # Call replan
-                print(
-                    f"\n🔄 Calling planner.replan() - iteration {replan_count}"
-                )
+                print(f"\n🔄 Calling planner.replan() - iteration {replan_count}")
                 try:
                     replan_result = planner.replan(
                         1.00
@@ -322,9 +288,7 @@ def plan():
                     if replan_result:
                         print(f"✅ Replan {replan_count} succeeded.")
                     else:
-                        print(
-                            f"⚠️ Replan {replan_count} returned false, but continuing anyway..."
-                        )
+                        print(f"⚠️ Replan {replan_count} returned false, but continuing anyway...")
 
                 except Exception as e:
                     print(
@@ -336,9 +300,7 @@ def plan():
                 # Get solutions AFTER replanning using new tracking
                 best_after, all_after = getBestSolutionFromPlanner(ss)
                 if best_after:
-                    printBestSolution(
-                        best_after, f"AFTER REPLAN {replan_count}"
-                    )
+                    printBestSolution(best_after, f"AFTER REPLAN {replan_count}")
 
                     # Show all solutions tracked by planner
                     if hasattr(planner, "getAllSolutions"):
@@ -363,27 +325,16 @@ def plan():
                             )
 
                         print(f"   🎮 Controls:")
-                        if (
-                            "controls" in solution_info
-                            and len(solution_info["controls"]) > 0
-                        ):
-                            for i, control in enumerate(
-                                solution_info["controls"]
-                            ):
-                                print(
-                                    f"     [{i}]: [{', '.join(f'{c:.5f}' for c in control)}]"
-                                )
+                        if "controls" in solution_info and len(solution_info["controls"]) > 0:
+                            for i, control in enumerate(solution_info["controls"]):
+                                print(f"     [{i}]: [{', '.join(f'{c:.5f}' for c in control)}]")
                         else:
                             print("     (No controls)")
                     print("=" * 70)
 
                     # Check if the path got shorter
-                    states_before = (
-                        best_before["state_count"] if best_before else 0
-                    )
-                    controls_before = (
-                        best_before["control_count"] if best_before else 0
-                    )
+                    states_before = best_before["state_count"] if best_before else 0
+                    controls_before = best_before["control_count"] if best_before else 0
                     states_after = best_after["state_count"]
                     controls_after = best_after.get("control_count", 0)
 
@@ -408,9 +359,7 @@ def plan():
                         )
 
                 else:
-                    print(
-                        "📊 AFTER REPLAN: No solution available, but continuing..."
-                    )
+                    print("📊 AFTER REPLAN: No solution available, but continuing...")
                     # Don't break, let user decide
 
                 # Add input prompt for user control (always ask regardless of solution state)

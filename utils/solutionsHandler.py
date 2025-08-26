@@ -1,4 +1,7 @@
+from ompl import base as ob
 from ompl import control as oc
+
+from utils.utils import printState
 
 
 def getPathInfo(solution_path, ss):
@@ -11,17 +14,40 @@ def getPathInfo(solution_path, ss):
 
     # Extract all controls while objects are valid
     controls_list = []
+    # Extract all control durations
+    time_list = []
     for i in range(solution_info["control_count"]):
         control = solution_path.getControl(i)
         control_values = [control[j] for j in range(control_dimension)]
         controls_list.append(control_values)
-        solution_info["controls"] = controls_list
+
+        # Get the duration for this control
+        control_duration = solution_path.getControlDuration(i)
+        time_list.append(control_duration)
+
+    solution_info["controls"] = controls_list
+    solution_info["time"] = time_list
 
     # Extract all states while objects are valid
     states_list = []
     for i in range(solution_info["state_count"]):
         state = solution_path.getState(i)
-        state_values = [state.getX(), state.getY(), state.getYaw()]
+        if ss.getSpaceInformation().getStateSpace().getType() == ob.STATE_SPACE_SE2:
+            state_values = [
+                state.getX(),
+                state.getY(),
+                state.getYaw(),
+            ]
+        elif ss.getSpaceInformation().getStateSpace().getType() == ob.STATE_SPACE_SE3:
+            state_values = [
+                state.getX(),
+                state.getY(),
+                state.getZ(),
+                state.rotation().x,
+                state.rotation().y,
+                state.rotation().z,
+                state.rotation().w,
+            ]
         states_list.append(state_values)
     solution_info["states"] = states_list
 
@@ -65,9 +91,7 @@ def getAllPlannerSolutionsInfo(planner, ss):
         # Sort by cost (best first)
         all_solution_infos.sort(key=lambda x: x["cost"])
 
-        print(
-            f"✅ Successfully extracted information from {len(all_solution_infos)} solutions"
-        )
+        print(f"✅ Successfully extracted information from {len(all_solution_infos)} solutions")
         return all_solution_infos
 
     except Exception as e:
@@ -141,14 +165,17 @@ def printBestSolution(best_solution, iteration_label=""):
 
     print(f"\n  📍 States:")
     for i, state in enumerate(best_solution["states"]):
-        print(
-            f"    [{i}]: x={state[0]:.5f}, y={state[1]:.5f}, yaw={state[2]:.5f}"
-        )
+        printState(state, "SE2", f"    [{i}]")
 
     print(f"\n  🎮 Controls:")
     if "controls" in best_solution and len(best_solution["controls"]) > 0:
         for i, control in enumerate(best_solution["controls"]):
-            print(f"    [{i}]: [{', '.join(f'{c:.5f}' for c in control)}]")
+            if "time" in best_solution and i < len(best_solution["time"]):
+                duration = best_solution["time"][i]
+                printState(control, "RealVector", f"    [{i}]")
+                print(f"    (duration: {duration:.3f}s)")
+            else:
+                printState(control, "RealVector", f"    [{i}]")
     else:
         print("    (No controls - reached goal state)")
     print("=" * 50)
@@ -176,13 +203,9 @@ def getSolutionsInfo(ss):
                     "⚠️ Enhanced tracking returned no solutions, falling back to original method..."
                 )
         else:
-            print(
-                "⚠️ Planner doesn't support solution tracking, using original method..."
-            )
+            print("⚠️ Planner doesn't support solution tracking, using original method...")
     except Exception as e:
-        print(
-            f"⚠️ Error with enhanced solution tracking: {e}, falling back to original method..."
-        )
+        print(f"⚠️ Error with enhanced solution tracking: {e}, falling back to original method...")
 
     # Fallback to original method
     print("🔄 Using original solution extraction method...")
@@ -207,13 +230,9 @@ def getSolutionsInfo(ss):
                     if opt:
                         info["cost"] = opt.cost(solution_path).value()
                     else:
-                        info["cost"] = (
-                            0.0  # Default cost for approximate solutions
-                        )
+                        info["cost"] = 0.0  # Default cost for approximate solutions
                 except:
-                    info["cost"] = (
-                        0.0  # Default cost for approximate solutions
-                    )
+                    info["cost"] = 0.0  # Default cost for approximate solutions
                 allSolutionInfos.append(info)
         except Exception as e:
             print(f"❌ Error getting solution path directly: {e}")
@@ -221,7 +240,5 @@ def getSolutionsInfo(ss):
     # Sort by cost (best first)
     allSolutionInfos.sort(key=lambda x: x["cost"])
 
-    print(
-        f"✅ Successfully extracted and sorted {len(allSolutionInfos)} solutions by cost."
-    )
+    print(f"✅ Successfully extracted and sorted {len(allSolutionInfos)} solutions by cost.")
     return allSolutionInfos

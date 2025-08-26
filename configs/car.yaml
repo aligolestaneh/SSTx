@@ -1,0 +1,53 @@
+# Car system configuration
+system: "simple_car"
+
+# Start state: [x, y, yaw] in SE2 space
+# Position in meters, orientation in radians
+startState: [0.0, 0.0, 0.0]
+
+# Goal state: [x, y, yaw] in SE2 space
+# Position in meters, orientation in radians
+goalState: [1.0, 1.0, 0.785]
+
+# Planning parameters
+planningTime: 7.5
+replanningTime: 2.0
+plannerName: "aorrt"
+visualize: false
+
+# Optimization parameters
+optimizer_learning_rate: 0.01
+optimizer_num_steps: 1000
+
+# Plateau regulator parameters
+plateau_factor: 0.1
+plateau_patience: 50
+plateau_min_lr: 1e-6        # Minimum learning rate
+
+# Visualization parameters
+plot_optimization_history: true    # Whether to plot optimization history
+
+# Sampling parameters for optimization
+sampling_num_states: 2000
+sampling_max_distance: 0.05
+sampling_position_std: 0.003
+sampling_rotation_std: 0.05
+
+# Car-specific parameters
+max_velocity: 1.0
+max_angular_velocity: 1.0
+wheelbase: 0.2
+max_steering_angle: 0.5
+
+# State validity checking
+state_validity_margin: 0.1
+goal_threshold: 0.5
+
+# Control parameters
+min_control_duration: 1
+max_control_duration: 1
+propagation_step_size: 2.0
+
+# Fusion planner parameters
+pruning_radius: 0.1
+optimization_objective: "path_length" 

@@ -117,9 +117,7 @@ class ActiveControlSampler(oc.ControlSampler):
 
         # Pick a pool of controls randomly from the predefined list if given
         if self.control_list is not None and len(self.control_list) > 0:
-            indices = np.random.choice(
-                range(len(self.control_list)), pool_size
-            )
+            indices = np.random.choice(range(len(self.control_list)), pool_size)
             x_pool = np.array(self.control_list)[indices]
 
         # Regular active sampling
@@ -147,14 +145,10 @@ class ActiveControlSampler(oc.ControlSampler):
             x_pool = pool.copy()
             x_pool[:, 0] = x_pool[:, 0].astype(int) * np.pi / 2
             mask = (x_pool[:, 0] % np.pi) == 0
-            x_pool[:, 1] *= np.where(
-                mask, self.obj_shape[1], self.obj_shape[0]
-            )
+            x_pool[:, 1] *= np.where(mask, self.obj_shape[1], self.obj_shape[0])
 
         # Active selection
-        variances = get_posteriors(
-            self.model, self.x_train, x_pool, sigma=1e-2
-        )
+        variances = get_posteriors(self.model, self.x_train, x_pool, sigma=1e-2)
 
         # Given the variances, assign weights to each control
         # Bias towards controls with lower variances
@@ -225,11 +219,6 @@ class GraspableRegion(ob.GoalSampleableRegion):
 
     def couldSample(self) -> bool:
         return True
-
-
-def isStateValid(spaceInformation, state):
-    """Check if state is valid (within bounds and collision-free)."""
-    return spaceInformation.satisfiesBounds(state)
 
 
 def get_combined_objective(

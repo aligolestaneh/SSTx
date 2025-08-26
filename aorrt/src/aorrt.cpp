@@ -12,14 +12,14 @@
 #include "ompl/base/ProblemDefinition.h"
 #include "ompl/tools/config/SelfConfig.h"
 #include "ompl/base/spaces/SE2StateSpace.h"
-#include "ompl/control/planners/fusion/fusion.h"
+#include "ompl/control/planners/aorrt/aorrt.h"
 #include "ompl/base/goals/GoalSampleableRegion.h"
 #include "ompl/base/objectives/MinimaxObjective.h"
 #include "ompl/base/objectives/MaximizeMinClearanceObjective.h"
 #include "ompl/base/objectives/PathLengthOptimizationObjective.h"
 #include "ompl/base/objectives/MechanicalWorkOptimizationObjective.h"
 
-ompl::control::Fusion::Fusion(const SpaceInformationPtr &si) : base::Planner(si, "Fusion")
+ompl::control::AORRT::AORRT(const SpaceInformationPtr &si) : base::Planner(si, "AORRT")
 {
     specs_.approximateSolutions = true;
     siC_ = si.get();
@@ -27,21 +27,19 @@ ompl::control::Fusion::Fusion(const SpaceInformationPtr &si) : base::Planner(si,
     prevSolutionControls_.clear();
     prevSolutionSteps_.clear();
 
-    Planner::declareParam<double>("goal_bias", this, &Fusion::setGoalBias, &Fusion::getGoalBias, "0.:.05:1.");
-    Planner::declareParam<double>("selection_radius", this, &Fusion::setSelectionRadius, &Fusion::getSelectionRadius, "0.:.1:"
+    Planner::declareParam<double>("goal_bias", this, &AORRT::setGoalBias, &AORRT::getGoalBias, "0.:.05:1.");
+    Planner::declareParam<double>("selection_radius", this, &AORRT::setSelectionRadius, &AORRT::getSelectionRadius, "0.:.1:"
                                                                                                                 "100");
-    Planner::declareParam<double>("pruning_radius", this, &Fusion::setPruningRadius, &Fusion::getPruningRadius, "0.:.1:100");
-    Planner::declareParam<bool>("terminate_on_first_solution", this, &Fusion::setTerminateOnFirstSolution, &Fusion::getTerminateOnFirstSolution, "0,1");
+    Planner::declareParam<bool>("terminate_on_first_solution", this, &AORRT::setTerminateOnFirstSolution, &AORRT::getTerminateOnFirstSolution, "0,1");
 
-    // bestSolutionPath_ = std::make_shared<PathControl>(si);
 }
 
-ompl::control::Fusion::~Fusion()
+ompl::control::AORRT::~AORRT()
 {
     freeMemory();
 }
 
-void ompl::control::Fusion::setup()
+void ompl::control::AORRT::setup()
 {
     base::Planner::setup();
     if (!nn_)
@@ -50,12 +48,6 @@ void ompl::control::Fusion::setup()
                              {
                                  return distanceFunction(a, b);
                              });
-    if (!witnesses_)
-        witnesses_.reset(tools::SelfConfig::getDefaultNearestNeighbors<Motion *>(this));
-    witnesses_->setDistanceFunction([this](const Motion *a, const Motion *b)
-                                    {
-                                        return distanceFunction(a, b);
-                                    });
 
     if (pdef_)
     {
@@ -82,7 +74,7 @@ void ompl::control::Fusion::setup()
 
 
 
-void ompl::control::Fusion::clear()
+void ompl::control::AORRT::clear()
 {
     Planner::clear();
     sampler_.reset();
@@ -90,8 +82,6 @@ void ompl::control::Fusion::clear()
     freeMemory();
     if (nn_)
         nn_->clear();
-    if (witnesses_)
-        witnesses_->clear();
     if (opt_)
         prevSolutionCost_ = opt_->infiniteCost();
     
@@ -100,7 +90,7 @@ void ompl::control::Fusion::clear()
 
 }
 
-void ompl::control::Fusion::freeMemory()
+void ompl::control::AORRT::freeMemory()
 {
     if (nn_)
     {
@@ -115,15 +105,7 @@ void ompl::control::Fusion::freeMemory()
             delete motion;
         }
     }
-    if (witnesses_)
-    {
-        std::vector<Motion *> witnesses;
-        witnesses_->list(witnesses);
-        for (auto &witness : witnesses)
-        {
-            delete witness;
-        }
-    }
+    
     for (auto &i : prevSolution_)
     {
         if (i)
@@ -139,11 +121,17 @@ void ompl::control::Fusion::freeMemory()
     prevSolutionSteps_.clear();
 }
 
-ompl::control::Fusion::Motion *ompl::control::Fusion::selectNode(ompl::control::Fusion::Motion *sample)
+ompl::control::AORRT::Motion *ompl::control::AORRT::selectNode(ompl::control::AORRT::Motion *sample)
 {
     std::vector<Motion *> ret;
     Motion *selected = nullptr;
     base::Cost bestCost = opt_->infiniteCost();
+    
+    // Track selection statistics (commented out for production)
+    // static unsigned totalSelections = 0;
+    // static unsigned radiusSelections = 0;
+    // static unsigned fallbackSelections = 0;
+    
     nn_->nearestR(sample, selectionRadius_, ret);
     for (auto &i : ret)
     {
@@ -153,8 +141,10 @@ ompl::control::Fusion::Motion *ompl::control::Fusion::selectNode(ompl::control::
             selected = i;
         }
     }
+    
     if (selected == nullptr)
     {
+        // Fallback to nearest neighbor
         int k = 1;
         while (selected == nullptr)
         {
@@ -164,39 +154,38 @@ ompl::control::Fusion::Motion *ompl::control::Fusion::selectNode(ompl::control::
                     selected = ret[i];
             k += 5;
         }
-    }
-    return selected;
-}
-
-ompl::control::Fusion::Witness *ompl::control::Fusion::findClosestWitness(ompl::control::Fusion::Motion *node)
-{
-    if (witnesses_->size() > 0)
-    {
-        auto *closest = static_cast<Witness *>(witnesses_->nearest(node));
-        if (distanceFunction(closest, node) > pruningRadius_)
-        {
-            closest = new Witness(siC_);
-            closest->linkRep(node);
-            si_->copyState(closest->state_, node->state_);
-            witnesses_->add(closest);
-        }
-        return closest;
+        // fallbackSelections++;
     }
     else
     {
-        auto *closest = new Witness(siC_);
-        closest->linkRep(node);
-        si_->copyState(closest->state_, node->state_);
-        witnesses_->add(closest);
-        return closest;
+        // radiusSelections++;
     }
+    
+    // totalSelections++;
+    
+    // Output selection statistics every 1000 selections (commented out for production)
+    // if (totalSelections % 1000 == 0)
+    // {
+    //     OMPL_INFORM("Selection stats: radius=%.1f%%, fallback=%.1f%% (radius=%.3f)", 
+    //                 (double)radiusSelections/totalSelections*100.0,
+    //                 (double)fallbackSelections/totalSelections*100.0,
+    //                 selectionRadius_);
+    // }
+    
+    return selected;
 }
 
-ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTerminationCondition &ptc)
+
+ompl::base::PlannerStatus ompl::control::AORRT::solve(const base::PlannerTerminationCondition &ptc)
 {
     checkValidity();
     base::Goal *goal = pdef_->getGoal().get();
     auto *goal_s = dynamic_cast<base::GoalSampleableRegion *>(goal);
+
+    // Initialize convergence tracking (commented out for production)
+    // static std::vector<std::pair<unsigned, double>> convergenceHistory;
+    // static unsigned lastConvergenceOutput = 0;
+    // static auto lastTime = std::chrono::high_resolution_clock::now();
 
     while (const base::State *st = pis_.nextStart())
     {
@@ -205,7 +194,6 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
         siC_->nullControl(motion->control_);
         nn_->add(motion);
         motion->accCost_ = opt_->identityCost();
-        findClosestWitness(motion);
     }
 
     if (nn_->size() == 0)
@@ -258,11 +246,9 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
             base::Cost incCostControl = opt_->controlCost(rctrl, cd);
             base::Cost incCost = opt_->combineCosts(incCostMotion, incCostControl);
             base::Cost cost = opt_->combineCosts(nmotion->accCost_, incCost);
-            Witness *closestWitness = findClosestWitness(rmotion);
 
-            if (closestWitness->rep_ == rmotion || opt_->isCostBetterThan(cost, closestWitness->rep_->accCost_))
+            if (opt_->isCostBetterThan(cost, bestSolutionCost_))
             {
-                Motion *oldRep = closestWitness->rep_;
                 /* create a motion */
                 auto *motion = new Motion(siC_);
                 motion->accCost_ = cost;
@@ -272,7 +258,6 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                 motion->parent_ = nmotion;
                 nmotion->children_.push_back(motion);
                 nmotion->numChildren_++;
-                closestWitness->linkRep(motion);
 
                 nn_->add(motion);
                 double dist = 0.0;
@@ -283,6 +268,20 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                 {
                     approxdif = dist;
                     solution = motion;
+
+                    // Add cost improvement analysis (keep this - it's essential)
+                    double costImprovement = 0.0;
+                    if (prevSolutionCost_.value() != std::numeric_limits<double>::infinity())
+                    {
+                        costImprovement = prevSolutionCost_.value() - solution->accCost_.value();
+                        OMPL_INFORM("Found solution with cost %.4f (improvement: %.4f, %.1f%% better)", 
+                                    solution->accCost_.value(), costImprovement, 
+                                    (costImprovement / prevSolutionCost_.value()) * 100.0);
+                    }
+                    else
+                    {
+                        OMPL_INFORM("Found FIRST solution with cost %.4f", solution->accCost_.value());
+                    }
 
                     for (auto &i : prevSolution_)
                         if (i)
@@ -305,10 +304,30 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
                     prevSolution_.push_back(si_->cloneState(solTrav->state_));
                     prevSolutionCost_ = solution->accCost_;
 
+                    // Track convergence history (commented out for production)
+                    // convergenceHistory.push_back({iterations, solution->accCost_.value()});
+                    
+                    // Output convergence analysis every 5 solutions (commented out for production)
+                    // if (convergenceHistory.size() - lastConvergenceOutput >= 5)
+                    // {
+                    //     OMPL_INFORM("Convergence analysis (last 5 solutions):");
+                    //     size_t start = convergenceHistory.size() - 5;
+                    //     for (size_t i = start; i < convergenceHistory.size(); ++i)
+                    //     {
+                    //         double improvement = (i > start) ? 
+                    //             convergenceHistory[i-1].second - convergenceHistory[i].second : 0.0;
+                    //         OMPL_INFORM("  Iter %u: cost=%.4f (improvement: %.4f)", 
+                    //                     convergenceHistory[i].first, convergenceHistory[i].second, improvement);
+                    //         }
+                    //     lastConvergenceOutput = convergenceHistory.size();
+                    // }
 
-
-                    OMPL_INFORM("Found solution with cost %.4f", solution->accCost_.value());
-                    // TODO: Update bestSolutionCost_ and bestSolutionPath_
+                    bestSolutionCost_ = solution->accCost_;
+                    bestSolutionPath_ = std::make_shared<PathControl>(si_);
+                    for (int i = prevSolution_.size() - 1; i >= 1; --i)
+                        bestSolutionPath_->append(prevSolution_[i], prevSolutionControls_[i - 1],
+                                    prevSolutionSteps_[i - 1] * siC_->getPropagationStepSize());
+                    bestSolutionPath_->append(prevSolution_[0]);
 
                     auto path(std::make_shared<PathControl>(si_));
                     for (int i = prevSolution_.size() - 1; i >= 1; --i)
@@ -371,30 +390,84 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
 
                 }
 
-                if (oldRep != rmotion)
+                if (nmotion != rmotion)
                 {
-                    while (oldRep->inactive_ && oldRep->numChildren_ == 0)
+                    while (nmotion->inactive_ && nmotion->numChildren_ == 0)
                     {
-                        oldRep->inactive_ = true;
-                        nn_->remove(oldRep);
+                        nmotion->inactive_ = true;
+                        nn_->remove(nmotion);
 
-                        if (oldRep->state_)
-                            si_->freeState(oldRep->state_);
-                        if (oldRep->control_)
-                            siC_->freeControl(oldRep->control_);
+                        if (nmotion->state_)
+                            si_->freeState(nmotion->state_);
+                        if (nmotion->control_)
+                            siC_->freeControl(nmotion->control_);
 
-                        oldRep->state_ = nullptr;
-                        oldRep->control_ = nullptr;
-                        oldRep->parent_->numChildren_--;
-                        oldRep->parent_->children_.erase(std::remove(oldRep->parent_->children_.begin(), oldRep->parent_->children_.end(), oldRep), oldRep->parent_->children_.end());
-                        Motion *oldRepParent = oldRep->parent_;
-                        delete oldRep;
-                        oldRep = oldRepParent;
+                        nmotion->state_ = nullptr;
+                        nmotion->control_ = nullptr;
+                        nmotion->parent_->numChildren_--;
+                        nmotion->parent_->children_.erase(std::remove(nmotion->parent_->children_.begin(), nmotion->parent_->children_.end(), nmotion), nmotion->parent_->children_.end());
+                        Motion *nmotionParent = nmotion->parent_;
+                        delete nmotion;
+                        nmotion = nmotionParent;
                     }
                 }
             }
         }
+        
         iterations++;
+        
+        // Periodic progress and tree statistics (commented out for production - too verbose)
+        // if (iterations % 10000 == 0)
+        // {
+        //     OMPL_INFORM("AORRT Progress: %u iterations, %u states, best cost: %.4f", 
+        //                 iterations, nn_->size(), bestSolutionCost_.value());
+        //     
+        //     // Tree depth analysis
+        //     unsigned maxDepth = 0;
+        //     unsigned totalDepth = 0;
+        //     unsigned leafCount = 0;
+        //     
+        //     std::vector<Motion*> allMotions;
+        //     nn_->list(allMotions);
+        //     
+        //     for (auto* motion : allMotions)
+        //     {
+        //         if (motion->numChildren_ == 0) // Leaf node
+        //         {
+        //             leafCount++;
+        //             unsigned depth = 0;
+        //             Motion* current = motion;
+        //             while (current->parent_)
+        //             {
+        //                 depth++;
+        //                 current = current->parent_;
+        //             }
+        //             totalDepth += depth;
+        //             maxDepth = std::max(maxDepth, depth);
+        //         }
+        //     }
+        //     
+        //     if (leafCount > 0)
+        //     {
+        //         double avgDepth = (double)totalDepth / leafCount;
+        //         OMPL_INFORM("  Tree stats: max depth=%u, avg depth=%.1f, leaf nodes=%u", 
+        //                     maxDepth, avgDepth, leafCount);
+        //     }
+        // }
+        
+        // Performance monitoring (commented out for production)
+        // if (iterations % 50000 == 0)
+        // {
+        //     // Calculate states per second
+        //     auto currentTime = std::chrono::high_resolution_clock::now();
+        //     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastTime);
+        //     double statesPerSecond = 50000.0 / (duration.count() / 1000.0);
+        //     
+        //     OMPL_INFORM("Performance: %.1f states/sec, %.1f iterations/sec", 
+        //                 statesPerSecond, statesPerSecond * (double)iterations / nn_->size());
+        //     
+        //     lastTime = currentTime;
+        // }
     }
 
     bool solved = false;
@@ -407,14 +480,25 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
 
     if (solution != nullptr)
     {
-        /* set the solution path */
-        // auto path(std::make_shared<PathControl>(si_));
-        // for (int i = prevSolution_.size() - 1; i >= 1; --i)
-        //     path->append(prevSolution_[i], prevSolutionControls_[i - 1],
-        //                  prevSolutionSteps_[i - 1] * siC_->getPropagationStepSize());
-        // path->append(prevSolution_[0]);
         solved = true;
-        // pdef_->addSolutionPath(path, approximate, approxdif, getName());
+        
+        // Calculate solution path statistics (keep this - it's useful)
+        unsigned pathLength = prevSolution_.size();
+        double totalPathCost = solution->accCost_.value();
+        double avgCostPerStep = totalPathCost / (pathLength - 1);
+        
+        OMPL_INFORM("Solution path: %u states, %.4f total cost, %.4f avg cost/step", 
+                    pathLength, totalPathCost, avgCostPerStep);
+        
+        // Show cost breakdown if using mechanical work objective (keep this)
+        if (dynamic_cast<base::MechanicalWorkOptimizationObjective*>(opt_.get()))
+        {
+            OMPL_INFORM("  Mechanical work objective: path length + control effort");
+        }
+        else if (dynamic_cast<base::PathLengthOptimizationObjective*>(opt_.get()))
+        {
+            OMPL_INFORM("  Path length objective: Euclidean distance optimization");
+        }
     }
 
     si_->freeState(xstate);
@@ -424,262 +508,55 @@ ompl::base::PlannerStatus ompl::control::Fusion::solve(const base::PlannerTermin
         siC_->freeControl(rmotion->control_);
     delete rmotion;
 
-
-
     OMPL_INFORM("%s: Created %u states in %u iterations", getName().c_str(), nn_->size(), iterations);
+
+    // Enhanced final statistics (keep this - it's essential summary)
+    if (solved)
+    {
+        OMPL_INFORM("Final solution statistics:");
+        OMPL_INFORM("  Best solution cost: %.4f", bestSolutionCost_.value());
+        OMPL_INFORM("  Total solutions found: %zu", allSolutions_.size());
+        
+        if (allSolutions_.size() > 1)
+        {
+            double firstCost = allSolutions_[0].cost_.value();
+            double finalCost = allSolutions_.back().cost_.value();
+            double totalImprovement = firstCost - finalCost;
+            double improvementPercentage = (totalImprovement / firstCost) * 100.0;
+            
+            OMPL_INFORM("  Cost improvement: %.4f (%.1f%%)", totalImprovement, improvementPercentage);
+            OMPL_INFORM("  Average cost improvement per solution: %.4f", 
+                        totalImprovement / (allSolutions_.size() - 1));
+        }
+        
+        // Calculate max tree depth for final stats (keep this - useful summary)
+        unsigned maxTreeDepth = 0;
+        std::vector<Motion*> allMotions;
+        nn_->list(allMotions);
+        
+        for (auto* motion : allMotions)
+        {
+            if (motion->numChildren_ == 0) // Leaf node
+            {
+                unsigned depth = 0;
+                Motion* current = motion;
+                while (current->parent_)
+                {
+                    depth++;
+                    current = current->parent_;
+                }
+                maxTreeDepth = std::max(maxTreeDepth, depth);
+            }
+        }
+        
+        OMPL_INFORM("  Tree depth: max=%u, states=%u", maxTreeDepth, nn_->size());
+    }
 
     return {solved, approximate};
 }
 
-ompl::base::PlannerStatus ompl::control::Fusion::resolve(const double replanning_time)
-{
-    checkValidity();
-    
-    // Ensure the planner has a tree to work with
-    if (!nn_ || nn_->size() == 0)
-    {
-        OMPL_WARN("%s: No tree to resolve.", getName().c_str());
-        return base::PlannerStatus::ABORT;
-    }
-    
-    // Get the current solution path and SAVE IT before calling solve()
-    ompl::base::PathPtr path = pdef_->getSolutionPath();
-    auto pathControl = std::dynamic_pointer_cast<PathControl>(path);
 
-    if (!pathControl || pathControl->getStateCount() < 2)
-    {
-        OMPL_WARN("%s: No valid solution path with at least 2 states available for resolve.", getName().c_str());
-        return base::PlannerStatus::ABORT;
-    }
-    
-    // SAVE the original path states before solve() overwrites them
-    std::vector<ompl::base::State*> originalPathStates;
-    for (size_t i = 0; i < pathControl->getStateCount(); ++i) {
-        ompl::base::State* stateCopy = si_->allocState();
-        si_->copyState(stateCopy, pathControl->getState(i));
-        originalPathStates.push_back(stateCopy);
-    }
-    
-    // Find the motion in the tree that corresponds to the second state in the solution path.
-    // This will become our new root/start motion.
-    // Note: We want to replan from the second state, so we need to find the motion
-    // that corresponds to the second state in the original path
-    ompl::base::State *secondStateInPath = originalPathStates[1];  // Use saved state
-    
-    Motion *tempMotionForSearch = new Motion(siC_);
-    si_->copyState(tempMotionForSearch->state_, secondStateInPath);
-    Motion *newStartMotion = nn_->nearest(tempMotionForSearch);
-    delete tempMotionForSearch; // Clean up the temporary motion
-
-    if (!newStartMotion)
-    {
-        OMPL_WARN("%s: Could not find nearest motion to second state.", getName().c_str());
-        return base::PlannerStatus::ABORT;
-    }
-    
-    double distance = si_->distance(newStartMotion->state_, secondStateInPath);
-    if (distance > 1e-5)
-    {
-        OMPL_WARN("%s: Could not find the second state of the solution path in the tree (distance=%.8f).", getName().c_str(), distance);
-        return base::PlannerStatus::ABORT;
-    }
-
-    // Remove everything except the subtree rooted at newStartMotion
-    // Collect all motions that should be KEPT (newStartMotion and its descendants)
-    std::set<Motion*> motionsToKeep;
-    std::queue<Motion*> subtreeQueue;
-    subtreeQueue.push(newStartMotion);
-    motionsToKeep.insert(newStartMotion);
-    
-    while (!subtreeQueue.empty()) {
-        Motion* current = subtreeQueue.front();
-        subtreeQueue.pop();
-        
-        // Add all children to keep set and queue
-        for (Motion* child : current->children_) {
-            motionsToKeep.insert(child);
-            subtreeQueue.push(child);
-        }
-    }
-    
-    // Get all motions currently in the tree
-    std::vector<Motion*> allMotions;
-    nn_->list(allMotions);
-    
-    // Remove motions that are NOT in the keep set
-    for (Motion* motion : allMotions) {
-        if (motionsToKeep.find(motion) == motionsToKeep.end()) {
-            // This motion should be removed
-            nn_->remove(motion);
-            if (motion->state_) si_->freeState(motion->state_);
-            if (motion->control_) siC_->freeControl(motion->control_);
-            delete motion;
-        }
-    }
-    
-    // Make newStartMotion the new root (no parent) but KEEP its children
-    newStartMotion->parent_ = nullptr;
-
-    // Rebuild witness set since motions were removed
-    if (witnesses_)
-    {
-        std::vector<Motion*> existing_witnesses;
-        witnesses_->list(existing_witnesses);
-        for(auto& w : existing_witnesses) {
-            delete w;
-        }
-        witnesses_->clear();
-
-        std::vector<Motion*> remaining_motions;
-        nn_->list(remaining_motions);
-        for (Motion* m : remaining_motions) {
-            findClosestWitness(m);
-        }
-    }
-
-    // Set the new start state in the problem definition
-    pdef_->clearStartStates();
-    pdef_->addStartState(newStartMotion->state_);
-    
-    // Ensure the goal is properly set (it should still be there, but make sure)
-    ompl::base::GoalPtr goal = pdef_->getGoal();
-    if (!goal) {
-        OMPL_ERROR("%s: No goal set in problem definition", getName().c_str());
-        return base::PlannerStatus::ABORT;
-    }
-    
-    // Call solve to replan from new start
-    pdef_->setGoal(goal);
-    base::PlannerTerminationCondition ptc = base::timedPlannerTerminationCondition(replanning_time);
-    base::PlannerStatus status = solve(ptc);
-
-    // The solve() call has created a new solution path starting from newStartMotion
-    // This new path should be the complete solution (starting from the new start state)
-    if (status)
-    {
-        ompl::base::PathPtr newPath = pdef_->getSolutionPath();
-        auto newPathControl = std::dynamic_pointer_cast<PathControl>(newPath);
-        
-        if (newPathControl && newPathControl->getStateCount() > 0)
-        {
-            // The new path from solve() already starts from newStartMotion and goes to the goal
-            // This is exactly what we want - a complete solution from the new start state
-            // No need to modify it further, just ensure it's properly set
-            
-            OMPL_INFORM("Resolve successful: new solution path created starting from new start state");
-        }
-    }
-    else
-    {
-        OMPL_WARN("Resolve failed: could not find new solution from replanning");
-    }
-
-    // Clean up saved original path states
-    for (ompl::base::State* state : originalPathStates) {
-        si_->freeState(state);
-    }
-
-    return status;
-}
-
-// ompl::base::PlannerStatus ompl::control::Fusion::simple_resolve(const double replanning_time)
-// {
-//     checkValidity();
-    
-//     // 1. Get the current states and control in the solution path
-//     ompl::base::PathPtr path = pdef_->getSolutionPath();
-//     auto pathControl = std::dynamic_pointer_cast<PathControl>(path);
-
-//     if (!pathControl || pathControl->getStateCount() < 2)
-//     {
-//         OMPL_WARN("%s: No valid solution path with at least 2 states available for simple_resolve.", getName().c_str());
-//         return base::PlannerStatus::ABORT;
-//     }
-    
-//     // Debug: Print original path info
-//     OMPL_INFORM("Simple_resolve: Original path has %d states and %d controls", 
-//                 pathControl->getStateCount(), pathControl->getControlCount());
-//     if (pathControl->getStateCount() > 0)
-//     {
-//         ompl::base::State* firstState = pathControl->getState(0);
-//         double x = firstState->as<ompl::base::SE2StateSpace::StateType>()->getX();
-//         double y = firstState->as<ompl::base::SE2StateSpace::StateType>()->getY();
-//         double yaw = firstState->as<ompl::base::SE2StateSpace::StateType>()->getYaw();
-//         OMPL_INFORM("Simple_resolve: Original path starts at (%.3f, %.3f, %.3f)", x, y, yaw);
-   
-//     // 2. Change the start state to the next state in solution path
-//     ompl::base::State *nextState = pathControl->getState(1);
-//     pdef_->clearStartStates();
-//     pdef_->addStartState(nextState);
-    
-//     // 3. Run the solve function for the given replanning_time
-//     base::PlannerTerminationCondition ptc = base::timedPlannerTerminationCondition(replanning_time);
-//     base::PlannerStatus status = solve(ptc);
-    
-//     // 4. If solve succeeded, use its result (which should start from the new start state)
-//     // If solve failed, create a fallback path by removing the first state/control
-//     if (status)
-//     {
-//         // solve() succeeded and created a new solution path starting from the new start state
-//         // This is exactly what we want - a replanned solution from the current position
-//         OMPL_INFORM("Simple_resolve: solve() succeeded, using replanned solution");
-        
-//         // Debug: Check what the new solution path looks like
-//         ompl::base::PathPtr newPath = pdef_->getSolutionPath();
-//         auto newPathControl = std::dynamic_pointer_cast<PathControl>(newPath);
-//         if (newPathControl && newPathControl->getStateCount() > 0)
-//         {
-//             ompl::base::State* firstState = newPathControl->getState(0);
-//             double x = firstState->as<ompl::base::SE2StateSpace::StateType>()->getX();
-//             double y = firstState->as<ompl::base::SE2StateSpace::StateType>()->getY();
-//             double yaw = firstState->as<ompl::base::SE2StateSpace::StateType>()->getYaw();
-//             OMPL_INFORM("Simple_resolve: New solution starts at (%.3f, %.3f, %.3f)", x, y, yaw);
-            
-//             // Check if it matches the expected start state
-//             double expectedX = nextState->as<ompl::base::SE2StateSpace::StateType>()->getX();
-//             double expectedY = nextState->as<ompl::base::SE2StateSpace::StateType>()->getY();
-//             double expectedYaw = nextState->as<ompl::base::SE2StateSpace::StateType>()->getYaw();
-//             OMPL_INFORM("Simple_resolve: Expected start at (%.3f, %.3f, %.3f)", expectedX, expectedY, expectedYaw);
-            
-//             if (std::abs(x - expectedX) > 0.01 || std::abs(y - expectedY) > 0.01 || std::abs(yaw - expectedYaw) > 0.01)
-//             {
-//                 OMPL_WARN("Simple_resolve: New solution doesn't start from expected position!");
-//             }
-//         }
-        
-//         return status;
-//     }
-//     else
-//     {
-//         // solve() failed, create a fallback path by removing the first state/control
-//         OMPL_INFORM("Simple_resolve: solve() failed, using fallback path (removing first state/control)");
-        
-//         auto fallbackPath = std::make_shared<PathControl>(si_);
-        
-//         // Add all states and controls starting from index 1 (skip the first state)
-//         for (size_t i = 1; i < pathControl->getStateCount(); ++i)
-//         {
-//             if (i == 1)
-//             {
-//                 // First state in fallback path (was second state in original path)
-//                 fallbackPath->append(pathControl->getState(i));
-//             }
-//             else
-//             {
-//                 // Add control and state for remaining segments
-//                 fallbackPath->append(pathControl->getState(i), 
-//                                    pathControl->getControl(i-1),
-//                                    pathControl->getControlDuration(i-1));
-//             }
-//         }
-        
-//         pdef_->clearSolutionPaths();
-//         pdef_->addSolutionPath(fallbackPath, true, 0.0, getName());
-//         return base::PlannerStatus(true, true); // solved, approximate
-//     }
-// }
-
-ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_time)
+ompl::base::PlannerStatus ompl::control::AORRT::resolve(const double replanning_time)
 {
     checkValidity();
     OMPL_INFORM("Starting: replan function");
@@ -846,18 +723,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
 
     OMPL_INFORM("Replan: Removed %d motions, kept %d motions", removedCount, keepCount);
     
-    // 7. Clear witnesses and rebuild
-    OMPL_INFORM("Starting: Clear and rebuild witnesses");
-    if (witnesses_)
-    {
-        std::vector<Motion*> existing_witnesses;
-        witnesses_->list(existing_witnesses);
-        for(auto& w : existing_witnesses) {
-            delete w;
-        }
-        witnesses_->clear();
-    }
-    OMPL_INFORM("Finished: Clear and rebuild witnesses");
+
     
     // 8. Make newStart the root (no parent)
     OMPL_INFORM("Starting: Make newStart the root");
@@ -887,14 +753,6 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
     //     }
     // }
     
-    // 10. Rebuild witness set for remaining motions
-    OMPL_INFORM("Starting: Rebuild witness set for remaining motions");
-    std::vector<Motion*> remaining_motions;
-    nn_->list(remaining_motions);
-    for (Motion* m : remaining_motions) {
-        findClosestWitness(m);
-    }
-    OMPL_INFORM("Finished: Rebuild witness set for remaining motions");
     
     OMPL_INFORM("Replan: Rebuilt tree with %d motions, new start cost: %.4f", 
                 nn_->size(), newStart->accCost_.value());
@@ -960,7 +818,7 @@ ompl::base::PlannerStatus ompl::control::Fusion::replan(const double replanning_
     return status;
 }
 
-void ompl::control::Fusion::getPlannerData(base::PlannerData &data) const
+void ompl::control::AORRT::getPlannerData(base::PlannerData &data) const
 {
     Planner::getPlannerData(data);
 
@@ -1004,7 +862,7 @@ void ompl::control::Fusion::getPlannerData(base::PlannerData &data) const
     }
 }
 
-void ompl::control::Fusion::costTrackingThread(const std::string& filename, 
+void ompl::control::AORRT::costTrackingThread(const std::string& filename, 
                                                std::chrono::time_point<std::chrono::system_clock> startTime) const
 {
     // Dummy implementation for Python binding compatibility
@@ -1012,12 +870,12 @@ void ompl::control::Fusion::costTrackingThread(const std::string& filename,
     // Do nothing - cost tracking functionality has been removed
 }
 
-const std::vector<ompl::base::PlannerSolution>& ompl::control::Fusion::getAllSolutions() const
+const std::vector<ompl::base::PlannerSolution>& ompl::control::AORRT::getAllSolutions() const
 {
     return allSolutions_;
 }
 
-void ompl::control::Fusion::clearAllSolutions()
+void ompl::control::AORRT::clearAllSolutions()
 {
     allSolutions_.clear();
 }

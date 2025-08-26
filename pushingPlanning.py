@@ -91,15 +91,16 @@ def plan(
         ss.getSpaceInformation().setMinMaxControlDuration(1, 1)
 
         # Set the control sampler
-        controlSampler = pickControlSampler(system, objectShape)
-        cspace.setControlSamplerAllocator(oc.ControlSamplerAllocator(controlSampler))
+        if system == "pushing":
+            controlSampler = pickControlSampler(system, objectShape)
+            cspace.setControlSamplerAllocator(oc.ControlSamplerAllocator(controlSampler))
 
         # Create a start state
         start = pickStartState(system, space, startState)
         ss.setStartState(start)
 
         # Create a goal state
-        goal = pickGoalState(system, goalState, startState, objectShape, ss)
+        goal = pickGoalState(system, goalState, ss)
         goal.setThreshold(0.02)
         ss.setGoal(goal)
     except Exception as e:
@@ -277,6 +278,7 @@ def pickBestControl(
 
 
 def simpleExecution(
+    system,
     client,
     solutionsInfo,
     goalState,
@@ -336,7 +338,7 @@ def simpleExecution(
         pos_waypoints = np.stack([waypoints[0]], axis=1)
 
         # Execute waypoints
-        executeThread = createExecuteThread(client, pos_waypoints)
+        executeThread = createExecuteThread(system, client, pos_waypoints)
         executeThread.start()
         executeThread.join()
 
@@ -485,6 +487,7 @@ def main(
     if doPhase1:
         # Call the simpleExecution function to execute Phase 1
         initial_final_state, initial_distance_to_planned, initial_cost = simpleExecution(
+            system=system,
             client=client,
             solutionsInfo=solutionsInfo,
             goalState=goalState,
@@ -662,7 +665,6 @@ def main(
         ##############################################################
         replanThread = createResolverThread(ss, replanningTime)
         replanThread.start()
-        print("[INFO] Replanner thread started")
 
         #################### Wait for the threads ####################
         ##############################################################

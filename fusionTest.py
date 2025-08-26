@@ -1,377 +1,183 @@
-from functools import partial
-import numpy as np
+# ------------------------------------------------------------
+# Batch car control matching via gradient descent (PyTorch)
+# ------------------------------------------------------------
+from typing import Callable, Dict, Any, Optional, Tuple
+import math
+import torch
 
-from utils.utils import visualize_tree_3d, parse_command_line_args
-from train_model import load_model
-from planning.planning_utils import (
-    BoxPropagator,
-    isStateValid,
-    GraspableRegion,
-)
-from planning.propagators import (
-    propagate_simple,
-    propagate_complex,
-    propagate_unstable,
-    propagate_pendulum,
-)
-
-try:
-    from ompl import base as ob
-    from ompl import control as oc
-    from ompl import util as ou
-
-    ou.setLogLevel(ou.LogLevel.LOG_INFO)
-except ImportError:
-    # if the ompl module is not in the PYTHONPATH assume it is installed in a
-    # subdirectory of the parent directory called "py-bindings."
-    from os.path import abspath, dirname, join
-    import sys
-
-    sys.path.insert(
-        0, join(dirname(dirname(abspath(__file__))), "py-bindings")
-    )
-    from ompl import base as ob
-    from ompl import control as oc
+torch.set_default_dtype(torch.float64)
+DEVICE = "cuda"  # change to "cuda" if available
 
 
-def plan(
-    planning_time=20.0,
-    dynamics_type="complex",
-    replanning_time=2.0,
-    planner="fusion",
-):
-    # construct the state space we are planning in
-    space = ob.SE2StateSpace()
+# --------------------- 1) Car dynamics ----------------------
+def car_dynamics(start: torch.Tensor, control: torch.Tensor, *, duration: float) -> torch.Tensor:
+    """
+    start:   (..., 3) = [x, y, yaw]
+    control: (..., 2) = [v, omega]
+    duration: scalar step
+    returns: next state (..., 3)
+    """
+    x, y, yaw = start.unbind(-1)
+    v, w = control.unbind(-1)
 
-    # set the bounds for the R^2 part of SE(2)
-    bounds = ob.RealVectorBounds(2)
-    bounds.setLow(0, -0.9)
-    bounds.setHigh(0, 0.76)
-    bounds.setLow(1, -0.9)
-    bounds.setHigh(1, -0.3)
-    space.setBounds(bounds)
+    dx = v * torch.cos(yaw) * duration
+    dy = v * torch.sin(yaw) * duration
+    dyaw = w * duration
 
-    # create a control space
-    cspace = oc.RealVectorControlSpace(space, 2)
-
-    # set the bounds for the control space
-    cspace = oc.RealVectorControlSpace(space, 3)
-    cbounds = ob.RealVectorBounds(3)
-    cbounds.setLow(0, 0)  # minimum rotation
-    cbounds.setHigh(0, 4)  # maximum rotation
-    cbounds.setLow(1, -0.4)  # minimum side offset
-    cbounds.setHigh(1, 0.4)  # maximum side offset
-    cbounds.setLow(2, 0.0)  # minimum push distance
-    cbounds.setHigh(2, 0.3)  # maximum push distance
-    cspace.setBounds(cbounds)
-
-    # define a simple setup class
-    ss = oc.SimpleSetup(cspace)
-    ss.setStateValidityChecker(
-        ob.StateValidityCheckerFn(
-            partial(isStateValid, ss.getSpaceInformation())
-        )
-    )
-
-    # Choose propagate function based on parameter
-    if dynamics_type == "simple":
-        ss.setStatePropagator(oc.StatePropagatorFn(propagate_simple))
-    elif dynamics_type == "complex":
-        ss.setStatePropagator(oc.StatePropagatorFn(propagate_complex))
-    elif dynamics_type == "unstable":
-        ss.setStatePropagator(oc.StatePropagatorFn(propagate_unstable))
-    elif dynamics_type == "pendulum":
-        ss.setStatePropagator(oc.StatePropagatorFn(propagate_pendulum))
-    elif dynamics_type == "model":
-        model = load_model("residual", 3, 3)
-        model.load(f"saved_models/crackerBoxRandom9000.pth")
-        model = model.model  # use torch model directly
-        model.eval()
-        propagator = BoxPropagator(model, np.array([0.1628, 0.2139, 0.0676]))
-        ss.setStatePropagator(oc.StatePropagatorFn(propagator.propagate))
-    else:
-        print(f"Unknown dynamics type: {dynamics_type}. Using complex.")
-        ss.setStatePropagator(oc.StatePropagatorFn(propagate_complex))
-        dynamics_type = "complex"
-
-    print(f"Using {dynamics_type} dynamics model")
-    print(f"Replanning time: {replanning_time} seconds")
-
-    # Set control duration properly
-    # si = ss.getSpaceInformation()
-
-    # Set control duration to 1-5 time steps (proper integer values)
-    # si.setMinMaxControlDuration(1, 5)
-    # print(f"✓ Set control duration to 1 time step")
-
-    # Verify current settings
-    # min_dur = si.getMinControlDuration()
-    # max_dur = si.getMaxControlDuration()
-    # print(f"Control duration range: {min_dur}-{max_dur} steps")
-
-    # create a start state
-    start = ob.State(space)
-    start().setX(0.0)
-    start().setY(-0.5)
-    start().setYaw(0.0)
-    ss.setStartState(start)
-
-    # create a goal state
-    goal_state = GraspableRegion(
-        ss.getSpaceInformation(),
-        np.array([0.725, -0.5, 0.0]),
-        np.array([0.1628, 0.2139, 0.0676]),
-        0.76,
-    )
-    goal_state.setThreshold(0.01)
-    ss.setGoal(goal_state)
-
-    # Set propagation step size before setting up planner
-    # si.setPropagationStepSize(0.1)
-    # print(f"✓ Set propagation step size to 0.1")
-
-    # (optionally) set planner
-    # planner = oc.RRT(si)
-    # planner = oc.EST(si)
-    # planner = oc.KPIECE1(si) # this is the default
-    # SyclopEST and SyclopRRT require a decomposition to guide the search
-    # decomp = MyDecomposition(32, bounds)
-    if planner == "fusion":
-        planner = oc.Fusion(ss.getSpaceInformation())
-    elif planner == "sst":
-        planner = oc.SST(ss.getSpaceInformation())
-    else:
-        raise ValueError(f"Unknown planner: {planner}")
-
-    planner.setPruningRadius(0.1)
-    ss.setPlanner(planner)
-
-    # attempt to solve the problem
-    solved = ss.solve(planning_time)
-
-    # Show 3D visualization of the tree
-    # print("Creating 3D visualization...")
-    visualize_tree_3d(planner, filename=f"fusion_3d_{planning_time}s.png")
-    # input("Press Enter to continue...")
-
-    if solved:
-        # print the path to screen
-        print("Found solution:\n%s" % ss.getSolutionPath().printAsMatrix())
-
-        print("Initial solution found")
-
-        # Interactive resolve loop - continue until goal reached or user stops
-        print(
-            f"\nStarting interactive resolve with {replanning_time}s time limit per iteration..."
-        )
-
-        # Goal coordinates for distance checking
-        goal_x, goal_y = 0.0, 0.5  # From goal state definition above
-
-        resolve_iter = 0
-        if replanning_time > 0:
-            while True:
-                resolve_iter += 1
-                print(f"\n{'='*60}")
-                print(f"RESOLVE ITERATION {resolve_iter}")
-                print(f"{'='*60}")
-
-                # Check current state before resolve
-                try:
-                    current_solution = ss.getSolutionPath()
-                    if (
-                        current_solution
-                        and current_solution.getStateCount() > 0
-                    ):
-                        # Get the last state in current solution (where we are now)
-                        last_state = current_solution.getState(
-                            current_solution.getStateCount() - 1
-                        )
-                        try:
-                            # Try to extract current position
-                            current_x = last_state.getX()
-                            current_y = last_state.getY()
-                            current_yaw = last_state.getYaw()
-                        except AttributeError:
-                            try:
-                                # Try compound state access
-                                se2_comp = last_state[0]
-                                current_x = se2_comp.getX()
-                                current_y = se2_comp.getY()
-                                current_yaw = se2_comp.getYaw()
-                            except:
-                                current_x, current_y, current_yaw = (
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                )
-
-                        # Calculate distance to goal
-                        distance_to_goal = (
-                            (current_x - goal_x) ** 2
-                            + (current_y - goal_y) ** 2
-                        ) ** 0.5
-
-                        print(
-                            f"📍 Current position: x={current_x:.3f}, y={current_y:.3f}, yaw={current_yaw:.3f}"
-                        )
-                        print(
-                            f"🎯 Goal position:    x={goal_x:.3f}, y={goal_y:.3f}"
-                        )
-                        print(f"📏 Distance to goal: {distance_to_goal:.3f}")
-
-                        # Check if we've reached the goal
-                        if (
-                            distance_to_goal < 0.05
-                        ):  # Same tolerance as setStartAndGoalStates
-                            print(
-                                f"🎉 SUCCESS! Reached goal (distance {distance_to_goal:.3f} < 0.05)"
-                            )
-                            print("No more resolve iterations needed!")
-                            break
-
-                    else:
-                        print("❌ No current solution available")
-                        break
-
-                except Exception as e:
-                    print(f"⚠️  Error checking current state: {e}")
-
-                # Get tree size before resolve
-                planner_data = ob.PlannerData(ss.getSpaceInformation())
-                planner.getPlannerData(planner_data)
-                tree_size_before = planner_data.numVertices()
-                print(
-                    f"🌳 Tree size before resolve: {tree_size_before} vertices"
-                )
-
-                # Ask user if they want to continue
-                user_input = (
-                    input(
-                        f"\n🤔 Run resolve iteration {resolve_iter}? (y/n/q to quit): "
-                    )
-                    .lower()
-                    .strip()
-                )
-                if user_input in ["n", "no", "q", "quit"]:
-                    print("👋 Stopping resolve iterations by user request")
-                    break
-                elif user_input not in ["y", "yes", ""]:
-                    print("Invalid input, assuming 'no'")
-                    break
-
-                # Run resolve iteration
-                print(f"\n🚀 Running resolve iteration {resolve_iter}...")
-
-                # Print current start and goal states
-                try:
-                    pdef = ss.getProblemDefinition()
-
-                    # Print start state
-                    if pdef.getStartStateCount() > 0:
-                        start_state = pdef.getStartState(0)
-                        try:
-                            start_x = start_state.getX()
-                            start_y = start_state.getY()
-                            start_yaw = start_state.getYaw()
-                            print(
-                                f"🏁 Start state: x={start_x:.3f}, y={start_y:.3f}, yaw={start_yaw:.3f}"
-                            )
-                        except AttributeError:
-                            print(f"🏁 Start state: {start_state}")
-                    else:
-                        print("🏁 No start state set")
-
-                    # Print goal state
-                    goal = pdef.getGoal()
-                    if goal:
-                        # Try to get goal state if it's a sampleable region
-                        try:
-                            goal_sampleable = goal.as_GoalSampleableRegion()
-                            if goal_sampleable and goal_sampleable.hasStates():
-                                goal_state = goal_sampleable.getState(0)
-                                goal_x = goal_state.getX()
-                                goal_y = goal_state.getY()
-                                goal_yaw = goal_state.getYaw()
-                                print(
-                                    f"🎯 Goal state: x={goal_x:.3f}, y={goal_y:.3f}, yaw={goal_yaw:.3f}"
-                                )
-                            else:
-                                print(f"🎯 Goal: {goal}")
-                        except:
-                            # If we can't extract specific goal state, just print the goal coordinates we know
-                            print(
-                                f"🎯 Goal region: x={goal_x:.3f}, y={goal_y:.3f}"
-                            )
-                    else:
-                        print("🎯 No goal set")
-
-                except Exception as e:
-                    print(f"⚠️  Error getting start/goal states: {e}")
-
-                try:
-                    result = planner.resolve(replanning_time)
-                    visualize_tree_3d(
-                        planner,
-                        filename=f"fusion_3d_{planning_time}s_resolve_{resolve_iter}.png",
-                    )
-                    print(f"✅ Resolve result: {result}")
-
-                    # Check tree size after resolve
-                    planner_data_after = ob.PlannerData(
-                        ss.getSpaceInformation()
-                    )
-                    planner.getPlannerData(planner_data_after)
-                    tree_size_after = planner_data_after.numVertices()
-                    print(
-                        f"🌳 Tree size after resolve: {tree_size_after} vertices"
-                    )
-                    tree_change = tree_size_after - tree_size_before
-                    if tree_change > 0:
-                        print(f"📈 Tree growth: {tree_change} vertices added")
-                    elif tree_change < 0:
-                        print(
-                            f"📉 Tree reduction: {-tree_change} vertices removed"
-                        )
-                    else:
-                        print(
-                            f"📊 Tree size unchanged: {tree_size_after} vertices"
-                        )
-
-                    # Show the updated solution
-                    try:
-                        updated_solution = ss.getSolutionPath()
-                        if updated_solution:
-                            print("\n📋 Updated solution path:")
-                            print(updated_solution.printAsMatrix())
-                        else:
-                            print("❌ No solution available after resolve")
-                            print(
-                                "🛑 Cannot continue - no path to goal from current state"
-                            )
-                            break
-                    except Exception as e:
-                        print(f"⚠️  Error getting solution after resolve: {e}")
-
-                except Exception as e:
-                    print(
-                        f"💥 Error during resolve iteration {resolve_iter}: {e}"
-                    )
-                    print("🛑 Stopping resolve iterations due to error")
-                    break
-
-        print(f"\n🏁 Resolve process completed!")
-        input("Press Enter to continue...")
+    return torch.stack([x + dx, y + dy, yaw + dyaw], dim=-1)
 
 
+# -------- 2) Wrapper: explicit Jacobian wrt control u -------
+def control_jacobian(
+    dynamics: Callable[..., torch.Tensor],
+    x: torch.Tensor,
+    u: torch.Tensor,
+    *,
+    dynamics_kwargs: Optional[Dict[str, Any]] = None,
+    create_graph: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns (y, df/du) with shapes:
+      y:    (..., state_dim)
+      dfdu: (..., state_dim, control_dim)
+    """
+    if dynamics_kwargs is None:
+        dynamics_kwargs = {}
+
+    u = u.clone().requires_grad_(True)
+
+    with torch.enable_grad():
+        y = dynamics(x.detach(), u, **dynamics_kwargs)
+
+    # flatten leading batch dims for per-item jacobian clarity
+    def _flatten(t: torch.Tensor) -> torch.Tensor:
+        return t.reshape(-1, t.shape[-1]) if t.ndim > 1 else t.unsqueeze(0)
+
+    x_flat = _flatten(x.detach())
+    u_flat = _flatten(u)
+    y_flat = _flatten(y)
+
+    B = x_flat.shape[0]
+    state_dim = y_flat.shape[-1]
+    from torch.autograd.functional import jacobian
+
+    def per_item(i: int) -> torch.Tensor:
+        xi = x_flat[i]
+        ui = u_flat[i]
+
+        def g(u_local: torch.Tensor) -> torch.Tensor:
+            return dynamics(xi, u_local, **dynamics_kwargs)
+
+        J = jacobian(g, ui, vectorize=True, create_graph=create_graph, strict=False)
+        return J.reshape(state_dim, -1)
+
+    Js = [per_item(i) for i in range(B)]
+    J_flat = torch.stack(Js, dim=0)  # (B, state_dim, control_dim)
+
+    batch_shape = y.shape[:-1]
+    control_dim = J_flat.shape[-1]
+    dfdu = J_flat.reshape(*batch_shape, state_dim, control_dim)
+    return y, dfdu
+
+
+# ------------------------ Helpers ---------------------------
+def uniform(low: float, high: float, shape, device=DEVICE):
+    return (low - high) * torch.rand(shape, device=device) + high
+
+
+def sample_states(N: int, bounds: Dict[str, tuple], device=DEVICE):
+    # bounds keys: x, y, yaw
+    x = uniform(*bounds["x"], (N, 1), device)
+    y = uniform(*bounds["y"], (N, 1), device)
+    yaw = uniform(*bounds["yaw"], (N, 1), device)
+    return torch.cat([x, y, yaw], dim=-1)
+
+
+def sample_controls(N: int, bounds: Dict[str, tuple], device=DEVICE):
+    # bounds keys: v, omega
+    v = uniform(*bounds["v"], (N, 1), device)
+    w = uniform(*bounds["omega"], (N, 1), device)
+    return torch.cat([v, w], dim=-1)
+
+
+def clamp_controls(u: torch.Tensor, bounds: Dict[str, tuple]):
+    u[..., 0].clamp_(min=bounds["v"][0], max=bounds["v"][1])
+    u[..., 1].clamp_(min=bounds["omega"][0], max=bounds["omega"][1])
+
+
+# -------------------------- Main ----------------------------
 if __name__ == "__main__":
-    args = parse_command_line_args()
-    planning_time = args["plan_time"]
-    dynamics_type = args["dynamics_type"]
-    replanning_time = args["replan_time"]
-    planner = args["planner"]
+    torch.manual_seed(1611)
 
-    print(
-        f"Starting planning with: {planning_time}s planning, {dynamics_type} dynamics, {replanning_time}s replanning, {planner} planner"
-    )
-    plan(planning_time, dynamics_type, replanning_time, planner)
+    # 8) Sampling bounds (tweak as you like)
+    bounds_state = {
+        "x": (-10.0, 10.0),
+        "y": (-10.0, 10.0),
+        "yaw": (-math.pi, math.pi),
+    }
+    bounds_control = {
+        "v": (0.0, 5.0),  # forward speed only, 0..5 m/s
+        "omega": (-1.0, 1.0),  # turn rate in rad/s
+    }
+    dt = 0.3
+
+    N = 1000
+
+    # 3) Sample 1000 random start states and 1000 random controls
+    x0 = sample_states(N, bounds_state).to(DEVICE)  # (N, 3)
+    u_true = sample_controls(N, bounds_control).to(DEVICE)  # (N, 2)
+
+    # 4) Get target states from these samples
+    with torch.no_grad():
+        x_target = car_dynamics(x0, u_true, duration=dt)  # (N, 3)
+
+    # 5) Sample another 1000 random controls (initial guess)
+    u_hat = sample_controls(N, bounds_control).to(DEVICE)
+    u_hat.requires_grad_(True)
+
+    # (Optional) sanity: Jacobian shape check on a small subset via wrapper
+    _ = control_jacobian(car_dynamics, x0[:5], u_hat[:5], dynamics_kwargs={"duration": dt})
+
+    # 6) Optimize the new controls to match targets
+    optimizer = torch.optim.Adam([u_hat], lr=0.2)
+    steps = 200
+
+    def loss_fn(pred, target):
+        return torch.nn.functional.mse_loss(pred, target)
+
+    # Track before/after for comparison
+    with torch.no_grad():
+        init_state_err = loss_fn(car_dynamics(x0, u_hat, duration=dt), x_target).item()
+        init_ctrl_rmse = torch.sqrt(torch.mean((u_hat - u_true) ** 2)).item()
+
+    for it in range(steps):
+        optimizer.zero_grad(set_to_none=True)
+        x_pred = car_dynamics(x0, u_hat, duration=dt)
+        loss = loss_fn(x_pred, x_target)
+        loss.backward()
+        optimizer.step()
+
+        # project back into bounds
+        with torch.no_grad():
+            clamp_controls(u_hat, bounds_control)
+
+        if (it + 1) % 25 == 0:
+            print(f"iter {it+1:3d}  loss={loss.item():.6e}")
+
+    with torch.no_grad():
+        final_state_err = loss_fn(car_dynamics(x0, u_hat, duration=dt), x_target).item()
+        final_ctrl_rmse = torch.sqrt(torch.mean((u_hat - u_true) ** 2)).item()
+
+    # 7) Compare sampled vs original controls
+    print("\n--- Results ---")
+    print(f"State MSE before: {init_state_err:.6e}")
+    print(f"State MSE after : {final_state_err:.6e}")
+    print(f"Control RMSE before: {init_ctrl_rmse:.6e}")
+    print(f"Control RMSE after : {final_ctrl_rmse:.6e}")
+
+    # You can also inspect a few rows:
+    with torch.no_grad():
+        idx = torch.randint(0, N, (5,))
+        print("\nSample comparisons [v, omega]:")
+        for i in idx.tolist():
+            print(f"true={u_true[i].tolist()}  hat={u_hat[i].tolist()}")

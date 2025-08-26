@@ -1,22 +1,18 @@
-from functools import partial
 import numpy as np
 
 from utils.utils import visualize_tree_3d
 
 from train_model import load_model
-from planning.planning_utils import (
-    BoxPropagator,
-    isStateValid,
-    GraspableRegion,
-)
+from planning.planning_utils import BoxPropagator
 
 # Import propagators
 from planning.propagators import (
-    propagate_simple,
-    propagate_complex,
-    propagate_unstable,
-    propagate_pendulum,
+    propagateDublinsAirplane,
+    propagateCar,
 )
+
+# Import control samplers
+from planning.controlSamplers import PushingControlSampler
 
 # Import OMPL modules
 from ompl import base as ob
@@ -35,6 +31,7 @@ def pickObjectShape(objectName: str):
 
 
 def configurationSpace(system: str):
+    print(f"DEBUG: configurationSpace called with system='{system}'")
 
     if system == "pushing":
         space = ob.SE2StateSpace()
@@ -45,7 +42,11 @@ def configurationSpace(system: str):
         bounds.setHigh(1, -0.3)
         space.setBounds(bounds)
 
-        cspace = oc.RealVectorControlSpace(space, 3)
+        # Create control space - CORRECT OMPL method
+        print(f"DEBUG: Creating RealVectorControlSpace(space, 3) for pushing")
+        cspace = oc.RealVectorControlSpace(space, 3)  # Correct: state space + dimension
+        print(f"DEBUG: Created cspace = {cspace}, type = {type(cspace)}")
+
         cbounds = ob.RealVectorBounds(3)
         cbounds.setLow(0, 0)  # minimum rotation
         cbounds.setHigh(0, 4)  # maximum rotation
@@ -55,10 +56,89 @@ def configurationSpace(system: str):
         cbounds.setHigh(2, 0.3)  # maximum push distance
         cspace.setBounds(cbounds)
 
+        print(f"DEBUG: Final cspace = {cspace}, type = {type(cspace)}")
+
         return space, cspace
 
-    elif system == "car":
-        pass
+    elif system == "simple_car":
+        print(f"DEBUG: Setting up simple_car system")
+        space = ob.SE2StateSpace()
+        bounds = ob.RealVectorBounds(2)
+        bounds.setLow(0, -5.0)
+        bounds.setHigh(0, 5.0)
+        bounds.setLow(1, -5.0)
+        bounds.setHigh(1, 5.0)
+        space.setBounds(bounds)
+
+        cspace = oc.RealVectorControlSpace(space, 2)
+
+        cbounds = ob.RealVectorBounds(2)
+        cbounds.setLow(0, -1.0)
+        cbounds.setHigh(0, 1.0)
+        cbounds.setLow(1, -0.3)
+        cbounds.setHigh(1, 0.3)
+        cspace.setBounds(cbounds)
+
+        return space, cspace
+
+    elif system == "drone":
+        print(f"DEBUG: Setting up drone system with droneStateSpace (SE3 + 6D)")
+
+        # Instantiate compound state space (SE3 + 6D)
+        space = ob.CompoundStateSpace()
+        space.addSubspace(ob.SE3StateSpace(), 1.0)
+        space.addSubspace(ob.RealVectorStateSpace(6), 0.002)
+
+        # set the bounds using the function in the class
+        posBounds = ob.RealVectorBounds(3)
+        posBounds.setLow(0, -20.0)
+        posBounds.setHigh(0, 20.0)
+        posBounds.setLow(1, -20.0)
+        posBounds.setHigh(1, 20.0)
+        posBounds.setLow(2, 0.1)
+        posBounds.setHigh(2, 20.0)
+
+        velBounds = ob.RealVectorBounds(6)
+        velBounds.setLow(-5.0)
+        velBounds.setHigh(5.0)
+
+        space.getSubspace(0).setBounds(posBounds)
+        space.getSubspace(1).setBounds(velBounds)
+
+        # Create control space for 4 RPM inputs (actual RPM values)
+        cspace = oc.RealVectorControlSpace(space, 4)
+        cbounds = ob.RealVectorBounds(4)
+        base_rpm = 14468.429183500699
+        offset_rpm = 0.001
+        for i in range(4):
+            cbounds.setLow(i, (1 - offset_rpm) * base_rpm)
+            cbounds.setHigh(i, (1 + offset_rpm) * base_rpm)
+        cspace.setBounds(cbounds)
+
+        print("DEBUG: Created droneStateSpace with bounds and RPM control bounds")
+        return space, cspace
+
+    elif system == "dublin_airplane":
+        space = ob.SE3StateSpace()
+        bounds = ob.RealVectorBounds(3)
+        bounds.setLow(0, -20.0)
+        bounds.setHigh(0, 20.0)
+        bounds.setLow(1, -20.0)
+        bounds.setHigh(1, 20.0)
+        bounds.setLow(2, 0.1)
+        bounds.setHigh(2, 20.0)
+        space.setBounds(bounds)
+
+        cspace = oc.RealVectorControlSpace(space, 3)
+        cbounds = ob.RealVectorBounds(3)
+        cbounds.setLow(0, -0.2)
+        cbounds.setHigh(0, 0.2)
+        cbounds.setLow(1, -0.2)
+        cbounds.setHigh(1, 0.2)
+        cbounds.setLow(2, 0.0)
+        cbounds.setHigh(2, 0.5)
+        cspace.setBounds(cbounds)
+        return space, cspace
 
     else:
         raise ValueError(f"Unknown system for space configuration: {system}")
@@ -74,17 +154,11 @@ def pickPropagator(system: str, object_shape: np.ndarray):
         propagator = BoxPropagator(model, object_shape)
         return propagator.propagate
 
-    elif system == "simple":
-        return propagate_simple
+    elif system == "dublin_airplane":
+        return propagateDublinsAirplane
 
-    elif system == "complex":
-        return propagate_complex
-
-    elif system == "unstable":
-        return propagate_unstable
-
-    elif system == "pendulum":
-        return propagate_pendulum
+    elif system == "simple_car":
+        return propagateCar
 
     else:
         raise ValueError(f"Unknown system: {system}")
@@ -92,6 +166,22 @@ def pickPropagator(system: str, object_shape: np.ndarray):
 
 def pickStartState(system: str, space: ob.StateSpace, startState: np.ndarray):
     if system == "pushing":
+        start_state = ob.State(space)
+        start_state().setX(startState[0])
+        start_state().setY(startState[1])
+        start_state().setYaw(startState[2])
+        return start_state
+
+    elif system == "dublin_airplane":
+        start_state = ob.State(space)
+        start_state().setXYZ(startState[0], startState[1], startState[2])
+        start_state()[1].x = startState[3]
+        start_state()[1].y = startState[4]
+        start_state()[1].z = startState[5]
+        start_state()[1].w = startState[6]
+        return start_state
+
+    elif system == "simple_car":
         start_state = ob.State(space)
         start_state().setX(startState[0])
         start_state().setY(startState[1])
@@ -150,9 +240,8 @@ class SE2GoalState(ob.GoalState):
 def pickGoalState(
     system: str,
     goalState: np.ndarray,
-    startState: np.ndarray,
-    objectShape: np.ndarray,
     ss: oc.SimpleSetup,
+    threshold: float = 0.1,
 ):
     if system == "pushing":
         try:
@@ -167,24 +256,47 @@ def pickGoalState(
 
             traceback.print_exc()
             raise e
-        # edge = 0.725
-        # goal_state = GraspableRegion(
-        #     ss.getSpaceInformation(),
-        #     np.array([edge, startState[1], 0.0]),
-        #     objectShape,
-        #     edge,
-        # )
-        # return goal_state
+    elif system == "dublin_airplane":
+        g_state = ob.State(ss.getSpaceInformation())
+        g_state().setXYZ(goalState[0], goalState[1], goalState[2])
+        g_state()[1].x = goalState[3]
+        g_state()[1].y = goalState[4]
+        g_state()[1].z = goalState[5]
+        g_state()[1].w = goalState[6]
+        goal_state = ob.GoalState(ss.getSpaceInformation())
+        goal_state.setState(g_state)
+        return goal_state
+
+    elif system == "simple_car":
+        # Create a goal state
+        g_state = ob.State(ss.getSpaceInformation())
+        g_state().setX(goalState[0])
+        g_state().setY(goalState[1])
+        g_state().setYaw(goalState[2])
+
+        # Create a goal region with threshold
+        goal_region = ob.GoalState(ss.getSpaceInformation())
+        goal_region.setState(g_state)
+        goal_region.setThreshold(threshold)  # Set the threshold here
+        return goal_region
     else:
         raise ValueError(f"Unknown system for goal state: {system}")
 
 
-def pickPlanner(planner_name: str, ss: oc.SimpleSetup):
+def pickPlanner(planner_name: str, ss: oc.SimpleSetup, pruningRadius: float = 0.1):
     if planner_name == "fusion":
         planner = oc.Fusion(ss.getSpaceInformation())
+        planner.setPruningRadius(pruningRadius)
+        return planner
+    elif planner_name == "aorrt":
+        planner = oc.AORRT(ss.getSpaceInformation())
         return planner
     elif planner_name == "sst":
         planner = oc.SST(ss.getSpaceInformation())
+        planner.setPruningRadius(pruningRadius)
+        return planner
+    elif planner_name == "rrt":
+        planner = oc.RRT(ss.getSpaceInformation())
         return planner
     else:
         raise ValueError(f"Unknown planner: {planner_name}")
@@ -194,298 +306,12 @@ def pickControlSampler(system: str, obj_shape: np.ndarray):
     if system == "pushing":
 
         def ControlSamplerAllocator(space):
-            return ControlSampler(space, obj_shape)
+            return PushingControlSampler(space, obj_shape)
 
         return ControlSamplerAllocator
+
+    elif system == "dublin_airplane":
+        # Use OMPL's default control sampler for now
+        return None
     else:
         raise ValueError(f"Unknown system for control sampler: {system}")
-
-
-class ControlSampler(oc.ControlSampler):
-    def __init__(self, space, obj_shape):
-        super().__init__(space)
-        self.control_space = space
-        self.obj_shape = obj_shape
-
-    def sample(self, control):
-        control[0] = np.random.uniform(
-            self.control_space.getBounds().low[0],
-            self.control_space.getBounds().high[0],
-        )
-        control[1] = np.random.uniform(
-            self.control_space.getBounds().low[1],
-            self.control_space.getBounds().high[1],
-        )
-        control[2] = np.random.uniform(
-            self.control_space.getBounds().low[2],
-            self.control_space.getBounds().high[2],
-        )
-
-        # Convert to absolute control values
-        control[0] = int(control[0]) * np.pi / 2
-        mask = (control[0] % np.pi) == 0
-        control[1] *= np.where(mask, self.obj_shape[1], self.obj_shape[0])
-
-
-# Removed duplicate SE2GoalState class definition
-
-
-def plan(
-    system: str,
-    objectName: str,
-    startState: np.ndarray,
-    goalState: np.ndarray,
-    planningTime: float = 20.0,
-    replanningTime: float = 2.0,
-    plannerName: str = "fusion",
-    visualize: bool = False,
-):
-    space, cspace = configurationSpace(system)
-
-    # Define a simple setup class
-    ss = oc.SimpleSetup(cspace)
-    ss.setStateValidityChecker(
-        ob.StateValidityCheckerFn(
-            partial(isStateValid, ss.getSpaceInformation())
-        )
-    )
-
-    # Choose propagator based on parameter
-    objectShape = pickObjectShape(objectName)
-    propagator = pickPropagator(system, objectShape)
-    ss.setStatePropagator(oc.StatePropagatorFn(propagator))
-
-    # Choose control sampler based on parameter
-    controlSampler = pickControlSampler(system, objectShape)
-    cspace.setControlSamplerAllocator(
-        oc.ControlSamplerAllocator(controlSampler)
-    )
-
-    # Create a start state
-    start = pickStartState(system, space, startState)
-    ss.setStartState(start)
-
-    # Create a goal state
-    goal = pickGoalState(system, goalState, startState, objectShape, ss)
-    goal.setThreshold(0.02)
-    ss.setGoal(goal)
-
-    # Choose planner based on parameter
-    planner = pickPlanner(plannerName, ss)
-    planner.setPruningRadius(0.1)
-    ss.setPlanner(planner)
-
-    # Attempt to solve the problem
-    solved = ss.solve(planningTime)
-
-    # Show 3D visualization of the tree
-    if visualize:
-        visualize_tree_3d(planner, filename=f"fusion_3d_{planningTime}s.png")
-
-    if solved:
-        # Print the path to screen
-        print("Initial solution found")
-        print("Found solution:\n%s" % ss.getSolutionPath().printAsMatrix())
-
-        # Interactive resolve loop - continue until goal reached or user stops
-        print(
-            f"\nStarting interactive resolve with {replanningTime}s time limit per iteration..."
-        )
-
-        # Goal coordinates for distance checking
-        goal_x, goal_y = 0.0, 0.5  # From goal state definition above
-
-        resolve_iter = 0
-        if replanningTime > 0:
-            while True:
-                resolve_iter += 1
-                print(f"\n{'='*60}")
-                print(f"RESOLVE ITERATION {resolve_iter}")
-                print(f"{'='*60}")
-
-                # Check current state before resolve
-                try:
-                    current_solution = ss.getSolutionPath()
-                    if (
-                        current_solution
-                        and current_solution.getStateCount() > 0
-                    ):
-                        # Get the last state in current solution (where we are now)
-                        last_state = current_solution.getState(
-                            current_solution.getStateCount() - 1
-                        )
-                        try:
-                            # Try to extract current position
-                            current_x = last_state.getX()
-                            current_y = last_state.getY()
-                            current_yaw = last_state.getYaw()
-                        except AttributeError:
-                            try:
-                                # Try compound state access
-                                se2_comp = last_state[0]
-                                current_x = se2_comp.getX()
-                                current_y = se2_comp.getY()
-                                current_yaw = se2_comp.getYaw()
-                            except:
-                                current_x, current_y, current_yaw = (
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                )
-
-                        # Calculate distance to goal
-                        distance_to_goal = (
-                            (current_x - goal_x) ** 2
-                            + (current_y - goal_y) ** 2
-                        ) ** 0.5
-
-                        print(
-                            f"📍 Current position: x={current_x:.3f}, y={current_y:.3f}, yaw={current_yaw:.3f}"
-                        )
-                        print(
-                            f"🎯 Goal position:    x={goal_x:.3f}, y={goal_y:.3f}"
-                        )
-                        print(f"📏 Distance to goal: {distance_to_goal:.3f}")
-
-                        # Check if we've reached the goal
-                        if (
-                            distance_to_goal < 0.05
-                        ):  # Same tolerance as setStartAndGoalStates
-                            print(
-                                f"🎉 SUCCESS! Reached goal (distance {distance_to_goal:.3f} < 0.05)"
-                            )
-                            print("No more resolve iterations needed!")
-                            break
-
-                    else:
-                        print("❌ No current solution available")
-                        break
-
-                except Exception as e:
-                    print(f"⚠️  Error checking current state: {e}")
-
-                # Get tree size before resolve
-                planner_data = ob.PlannerData(ss.getSpaceInformation())
-                planner.getPlannerData(planner_data)
-                tree_size_before = planner_data.numVertices()
-                print(
-                    f"🌳 Tree size before resolve: {tree_size_before} vertices"
-                )
-
-                # Ask user if they want to continue
-                user_input = (
-                    input(
-                        f"\n🤔 Run resolve iteration {resolve_iter}? (y/n/q to quit): "
-                    )
-                    .lower()
-                    .strip()
-                )
-                if user_input in ["n", "no", "q", "quit"]:
-                    print("👋 Stopping resolve iterations by user request")
-                    break
-                elif user_input not in ["y", "yes", ""]:
-                    print("Invalid input, assuming 'no'")
-                    break
-
-                # Run resolve iteration
-                print(f"\n🚀 Running resolve iteration {resolve_iter}...")
-
-                # Print current start and goal states
-                try:
-                    pdef = ss.getProblemDefinition()
-
-                    # Print start state
-                    if pdef.getStartStateCount() > 0:
-                        start_state = pdef.getStartState(0)
-                        try:
-                            start_x = start_state.getX()
-                            start_y = start_state.getY()
-                            start_yaw = start_state.getYaw()
-                            print(
-                                f"🏁 Start state: x={start_x:.3f}, y={start_y:.3f}, yaw={start_yaw:.3f}"
-                            )
-                        except AttributeError:
-                            print(f"🏁 Start state: {start_state}")
-                    else:
-                        print("🏁 No start state set")
-
-                    # Print goal state
-                    goal = pdef.getGoal()
-                    if goal:
-                        # Try to get goal state if it's a sampleable region
-                        try:
-                            goal_sampleable = goal.as_GoalSampleableRegion()
-                            if goal_sampleable and goal_sampleable.hasStates():
-                                goal_state = goal_sampleable.getState(0)
-                                goal_x = goal_state.getX()
-                                goal_y = goal_state.getY()
-                                goal_yaw = goal_state.getYaw()
-                                print(
-                                    f"🎯 Goal state: x={goal_x:.3f}, y={goal_y:.3f}, yaw={goal_yaw:.3f}"
-                                )
-                            else:
-                                print(f"🎯 Goal: {goal}")
-                        except:
-                            # If we can't extract specific goal state, just print the goal coordinates we know
-                            print(
-                                f"🎯 Goal region: x={goal_x:.3f}, y={goal_y:.3f}"
-                            )
-                    else:
-                        print("🎯 No goal set")
-
-                except Exception as e:
-                    print(f"⚠️  Error getting start/goal states: {e}")
-
-                try:
-                    result = planner.resolve(replanningTime)
-                    visualize_tree_3d(
-                        planner,
-                        filename=f"fusion_3d_{planningTime}s_resolve_{resolve_iter}.png",
-                    )
-                    print(f"✅ Resolve result: {result}")
-
-                    # Check tree size after resolve
-                    planner_data_after = ob.PlannerData(
-                        ss.getSpaceInformation()
-                    )
-                    planner.getPlannerData(planner_data_after)
-                    tree_size_after = planner_data_after.numVertices()
-                    print(
-                        f"🌳 Tree size after resolve: {tree_size_after} vertices"
-                    )
-                    tree_change = tree_size_after - tree_size_before
-                    if tree_change > 0:
-                        print(f"📈 Tree growth: {tree_change} vertices added")
-                    elif tree_change < 0:
-                        print(
-                            f"📉 Tree reduction: {-tree_change} vertices removed"
-                        )
-                    else:
-                        print(
-                            f"📊 Tree size unchanged: {tree_size_after} vertices"
-                        )
-
-                    # Show the updated solution
-                    try:
-                        updated_solution = ss.getSolutionPath()
-                        if updated_solution:
-                            print("\n📋 Updated solution path:")
-                            print(updated_solution.printAsMatrix())
-                        else:
-                            print("❌ No solution available after resolve")
-                            print(
-                                "🛑 Cannot continue - no path to goal from current state"
-                            )
-                            break
-                    except Exception as e:
-                        print(f"⚠️  Error getting solution after resolve: {e}")
-
-                except Exception as e:
-                    print(
-                        f"💥 Error during resolve iteration {resolve_iter}: {e}"
-                    )
-                    print("🛑 Stopping resolve iterations due to error")
-                    break
-
-        print(f"\n🏁 Resolve process completed!")
-        input("Press Enter to continue...")
